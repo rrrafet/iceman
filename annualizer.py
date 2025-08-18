@@ -9,7 +9,7 @@ annualized form when needed for reporting.
 
 import numpy as np
 from typing import Dict, Any
-from spark.mappers import frequency_to_multiplier
+from spark.core.mappers import frequency_to_multiplier
 
 
 class RiskAnnualizer:
