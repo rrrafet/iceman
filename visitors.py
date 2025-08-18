@@ -246,7 +246,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         self.annualize = annualize
         
         # Initialize logging
-        from ..logging_config import setup_risk_decomposition_logging
+        from spark.core.logging_config import setup_risk_decomposition_logging
         self.logger = setup_risk_decomposition_logging(
             log_level=log_level,
             verbose=verbose,
