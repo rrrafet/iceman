@@ -11,7 +11,7 @@ from typing import Dict, Optional, Any, Iterable, Tuple, List, TYPE_CHECKING
 from datetime import date
 import pandas as pd
 import numpy as np
-from ..core.transformable import Transformable
+from spark.core.transformable import Transformable
 
 if TYPE_CHECKING:
     from .graph import PortfolioGraph

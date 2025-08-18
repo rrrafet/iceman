@@ -19,8 +19,8 @@ import logging
 if TYPE_CHECKING:
     from .graph import PortfolioGraph
     from .visitors import FactorRiskDecompositionVisitor
-    from ..risk.estimator import LinearRiskModelEstimator
-    from ..risk.schema import RiskResultSchema
+    from spark.risk.estimator import LinearRiskModelEstimator
+    from spark.risk.schema import RiskResultSchema
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,7 @@ class PortfolioRiskAnalyzer:
         
         Converts the hierarchical visitor results into unified schema format.
         """
-        from ..risk.schema import RiskResultSchema, AnalysisType
+        from spark.risk.schema import RiskResultSchema, AnalysisType
         
         try:
             # Get basic metrics from visitor

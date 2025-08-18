@@ -20,11 +20,11 @@ from .metrics import (
 )
 
 if TYPE_CHECKING:
-    from ..risk.estimator import LinearRiskModelEstimator, LinearRiskModel
-    from ..risk.base import RiskDecomposerBase
+    from spark.risk.estimator import LinearRiskModelEstimator, LinearRiskModel
+    from spark.risk.base import RiskDecomposerBase
     from .components import PortfolioComponent, PortfolioLeaf, PortfolioNode
     from .metrics import WeightCalculationService
-    from ..risk.schema import RiskResultSchema
+    from spark.risk.schema import RiskResultSchema
 
 
 
@@ -257,7 +257,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
 
         # Initialize estimator
         if estimator is None:
-            from ..risk.estimator import LinearRiskModelEstimator
+            from spark.risk.estimator import LinearRiskModelEstimator
             self.estimator = LinearRiskModelEstimator(regression_type='ols', min_obs=30, freq=freq)
             self.logger.info("Initialized default LinearRiskModelEstimator with OLS regression and min_obs=30")
         else:
@@ -480,7 +480,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
             
             # Store hierarchical model context in metric store
             if self.metric_store:
-                from ..risk.context import create_hierarchical_risk_context
+                from spark.risk.context import create_hierarchical_risk_context
                 hierarchical_context = create_hierarchical_risk_context(unified_matrices, self.annualize)
                 
                 # Log comprehensive risk decomposition summary
@@ -1188,7 +1188,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                     and not benchmark_returns.empty and not active_returns.empty):
                     
                     # Calculate cross-covariance using RiskCalculator
-                    from ..risk.calculator import RiskCalculator
+                    from spark.risk.calculator import RiskCalculator
                     cross_covar = RiskCalculator.calculate_cross_covariance(
                         benchmark_returns.values, active_returns.values
                     )
@@ -1298,7 +1298,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         RiskResultSchema
             Visitor results in unified schema format
         """
-        from ..risk.schema_factory import RiskSchemaFactory
+        from spark.risk.schema_factory import RiskSchemaFactory
         
         # Use factory method to create schema from visitor results
         return RiskSchemaFactory.from_visitor_results(

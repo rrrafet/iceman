@@ -20,8 +20,8 @@ from copy import deepcopy
 
 if TYPE_CHECKING:
     from .graph import PortfolioGraph
-    from ..risk.decomposer import RiskDecomposer
-    from ..risk.context import HierarchicalModelContext
+    from spark.risk.decomposer import RiskDecomposer
+    from spark.risk.context import HierarchicalModelContext
 
 logger = logging.getLogger(__name__)
 
