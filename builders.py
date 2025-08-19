@@ -530,6 +530,36 @@ class PortfolioBuilder:
                     graph.metric_store.set_metric(component_id, 'benchmark_operational_relative',
                                                 ScalarMetric(info['benchmark_operational_relative']))
             
+            # Set original weights if auto-normalized
+            if info.get('auto_normalized', False):
+                if 'portfolio_weight_original' in info:
+                    graph.metric_store.set_metric(component_id, 'portfolio_weight_original',
+                                                ScalarMetric(info['portfolio_weight_original']))
+                if 'benchmark_weight_original' in info:
+                    graph.metric_store.set_metric(component_id, 'benchmark_weight_original',
+                                                ScalarMetric(info['benchmark_weight_original']))
+                
+                # Store weight type metadata
+                from .metrics import Metric
+                class StringMetric(Metric):
+                    def __init__(self, value):
+                        self._value = value
+                    def value(self, when=None):
+                        return self._value
+                    def copy(self):
+                        return StringMetric(self._value)
+                        
+                if 'portfolio_weight_type_original' in info:
+                    graph.metric_store.set_metric(component_id, 'portfolio_weight_type_original',
+                                                StringMetric(info['portfolio_weight_type_original']))
+                if 'benchmark_weight_type_original' in info:
+                    graph.metric_store.set_metric(component_id, 'benchmark_weight_type_original', 
+                                                StringMetric(info['benchmark_weight_type_original']))
+                    
+                # Add normalization flag
+                graph.metric_store.set_metric(component_id, 'auto_normalized',
+                                            ScalarMetric(1.0))  # Use 1.0 as True
+            
             # Set additional data
             if info['data']:
                 for key, value in info['data'].items():
@@ -558,7 +588,50 @@ class PortfolioBuilder:
         if not is_valid:
             print(f"Warning: Graph validation issues found: {issues}")
         
+        # Add utility methods to the graph for weight retrieval
+        self._add_weight_utility_methods(graph)
+        
         return graph
+    
+    def _add_weight_utility_methods(self, graph: 'PortfolioGraph') -> None:
+        """Add utility methods to PortfolioGraph for weight retrieval."""
+        
+        def get_original_weight(component_id: str, weight_type: str = 'portfolio') -> Optional[float]:
+            """Get original (pre-normalization) weight for a component."""
+            metric_name = f'{weight_type}_weight_original'
+            metric = graph.metric_store.get_metric(component_id, metric_name)
+            return metric.value() if metric else None
+        
+        def get_normalized_weight(component_id: str, weight_type: str = 'portfolio') -> Optional[float]:
+            """Get normalized weight for a component."""
+            metric_name = f'{weight_type}_weight'
+            metric = graph.metric_store.get_metric(component_id, metric_name)
+            return metric.value() if metric else None
+        
+        def was_auto_normalized(component_id: str) -> bool:
+            """Check if component weights were auto-normalized."""
+            metric = graph.metric_store.get_metric(component_id, 'auto_normalized')
+            return metric.value() == 1.0 if metric else False
+        
+        def get_weight_summary(component_id: str, weight_type: str = 'portfolio') -> Dict[str, Any]:
+            """Get comprehensive weight summary for a component."""
+            return {
+                'component_id': component_id,
+                'weight_type': weight_type,
+                'original_weight': get_original_weight(component_id, weight_type),
+                'normalized_weight': get_normalized_weight(component_id, weight_type),
+                'relative_weight': graph.metric_store.get_metric(component_id, f'{weight_type}_relative_weight').value()
+                    if graph.metric_store.get_metric(component_id, f'{weight_type}_relative_weight') else None,
+                'auto_normalized': was_auto_normalized(component_id),
+                'is_overlay': hasattr(graph.components.get(component_id, None), 'is_overlay') 
+                    and getattr(graph.components[component_id], 'is_overlay', False)
+            }
+        
+        # Attach methods to graph instance
+        graph.get_original_weight = get_original_weight
+        graph.get_normalized_weight = get_normalized_weight  
+        graph.was_auto_normalized = was_auto_normalized
+        graph.get_weight_summary = get_weight_summary
     
     def validate_weights(self) -> Tuple[bool, List[str]]:
         """
@@ -1046,11 +1119,15 @@ class PortfolioBuilder:
         """
         Auto-normalize weights to ensure WeightPathAggregator consistency.
         
+        Phase 0: Preserve original weights for audit trail
         Phase 1: Bottom-up aggregation - calculate parent weights from children
         Phase 2: Top-down relative weight calculation for multiplication consistency
         """
         if not self.auto_normalize_hierarchy:
             return
+        
+        # Phase 0: Store original weights before normalization
+        self._preserve_original_weights()
             
         # Phase 1: Bottom-up weight aggregation (leaves to root)
         topo_order = self._get_topological_order()
@@ -1214,6 +1291,21 @@ class PortfolioBuilder:
         
         # If no non-overlay parent found, return 0
         return 0.0
+    
+    def _preserve_original_weights(self) -> None:
+        """Preserve original input weights before auto-normalization."""
+        for component_id, info in self._components_info.items():
+            # Store original weights with audit trail
+            if 'portfolio_weight' in info and info['portfolio_weight'] is not None:
+                info['portfolio_weight_original'] = info['portfolio_weight']
+                info['portfolio_weight_type_original'] = info.get('portfolio_weight_type', 'absolute')
+            
+            if 'benchmark_weight' in info and info['benchmark_weight'] is not None:
+                info['benchmark_weight_original'] = info['benchmark_weight']  
+                info['benchmark_weight_type_original'] = info.get('benchmark_weight_type', 'absolute')
+                
+            # Add normalization metadata
+            info['auto_normalized'] = True
     
     def _validate_structure(self, graph: "PortfolioGraph") -> List["ValidationIssue"]:
         """Validate basic graph structure."""
