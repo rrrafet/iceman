@@ -179,8 +179,8 @@ class PortfolioBuilder:
                 'id': current_path,
                 'name': comp_name,
                 'type': comp_type,
-                'portfolio_weight': portfolio_weight if is_leaf else None,
-                'benchmark_weight': benchmark_weight if is_leaf else 0.0,
+                'portfolio_weight': portfolio_weight,
+                'benchmark_weight': benchmark_weight,
                 'data': data if is_leaf else None,
                 'path_parts': path_parts[:i+1],
                 'is_overlay': is_overlay if is_leaf else False
@@ -448,12 +448,11 @@ class PortfolioBuilder:
         # Import here to avoid circular imports
         from .graph import PortfolioGraph
         
-        # Auto-normalize weights first (if enabled)
-        self._auto_normalize_weights()
+        # Validate and reconcile weights first (always)
+        self._validate_and_reconcile_weights()
         
-        # Validate and reconcile weights (skip if auto-normalized)
-        if not self.auto_normalize_hierarchy:
-            self._validate_and_reconcile_weights()
+        # Auto-normalize weights after reconciliation (if enabled)
+        self._auto_normalize_weights()
         
         # Normalize relative weights first
         self._normalize_relative_weights()
@@ -1119,15 +1118,13 @@ class PortfolioBuilder:
         """
         Auto-normalize weights to ensure WeightPathAggregator consistency.
         
-        Phase 0: Preserve original weights for audit trail
         Phase 1: Bottom-up aggregation - calculate parent weights from children
-        Phase 1.5: Proportional rebasing - normalize root weight while preserving proportions
         Phase 2: Top-down relative weight calculation for multiplication consistency
         """
         if not self.auto_normalize_hierarchy:
             return
         
-        # Phase 0: Store original weights before normalization
+        # Store original weights before normalization
         self._preserve_original_weights()
             
         # Phase 1: Bottom-up weight aggregation (leaves to root)
@@ -1140,132 +1137,10 @@ class PortfolioBuilder:
             # Calculate parent weight from core children (excluding overlays)
             self._calculate_parent_core_weights(component_id)
         
-        # Phase 1.5: Proportional rebasing to standardize root weight
-        self._rebase_weights_proportionally()
-        
         # Phase 2: Top-down relative weight calculation (root to leaves)
         for component_id in topo_order:  # Start from root
             self._calculate_relative_weights(component_id)
     
-    def _rebase_weights_proportionally(self, target_root_weight: float = 1.0) -> None:
-        """
-        Rebase all weights proportionally to achieve target root weight while preserving proportions.
-        
-        This phase ensures:
-        - Root weight equals target (default 1.0)
-        - All proportional relationships preserved exactly
-        - Hierarchical consistency maintained (parent = sum of children)
-        - WeightPathAggregator compatibility
-        - Overlay components handled correctly
-        
-        Parameters
-        ----------
-        target_root_weight : float, default 1.0
-            Target weight for the root component
-        """
-        # Find root component(s) - components with no parents
-        root_components = []
-        for comp_id in self._components_info:
-            is_root = True
-            for parent_id, child_id in self._edges:
-                if child_id == comp_id:
-                    is_root = False
-                    break
-            if is_root:
-                root_components.append(comp_id)
-        
-        if not root_components:
-            return  # No root found
-        
-        # Use the specified root or first root found
-        if self.root_id in root_components:
-            primary_root = self.root_id
-        else:
-            primary_root = root_components[0]
-        
-        # Calculate rebasing factors for each weight side
-        for weight_side in ['portfolio', 'benchmark']:
-            weight_key = f'{weight_side}_weight'
-            
-            # Get current root weight after bottom-up aggregation
-            root_info = self._components_info.get(primary_root, {})
-            current_root_weight = root_info.get(weight_key, 0.0)
-            
-            if current_root_weight is None or current_root_weight == 0.0:
-                # Skip rebasing if root weight is zero or None
-                continue
-            
-            # Calculate rebasing factor
-            rebasing_factor = target_root_weight / current_root_weight
-            
-            # Apply proportional scaling to ALL components
-            for comp_id, comp_info in self._components_info.items():
-                current_weight = comp_info.get(weight_key)
-                
-                if current_weight is not None:
-                    # Apply rebasing factor proportionally
-                    rebased_weight = current_weight * rebasing_factor
-                    comp_info[weight_key] = rebased_weight
-                    
-                    # Store rebasing metadata for transparency
-                    comp_info[f'{weight_side}_rebasing_factor'] = rebasing_factor
-                    comp_info[f'{weight_side}_weight_pre_rebase'] = current_weight
-        
-        # Verify hierarchical consistency after rebasing
-        self._verify_post_rebase_consistency()
-    
-    def _verify_post_rebase_consistency(self) -> None:
-        """
-        Verify that hierarchical consistency is maintained after proportional rebasing.
-        
-        Since rebasing applies the same factor to all weights proportionally,
-        the parent-child sum relationships should be preserved exactly.
-        """
-        tolerance = 1e-10  # Very tight tolerance since rebasing is mathematically exact
-        
-        for weight_side in ['portfolio', 'benchmark']:
-            weight_key = f'{weight_side}_weight'
-            
-            # Check each parent-child relationship
-            parent_children_map = {}
-            for parent_id, child_id in self._edges:
-                if parent_id not in parent_children_map:
-                    parent_children_map[parent_id] = []
-                parent_children_map[parent_id].append(child_id)
-            
-            for parent_id, children in parent_children_map.items():
-                if parent_id not in self._components_info:
-                    continue
-                
-                parent_weight = self._components_info[parent_id].get(weight_key, 0.0)
-                if parent_weight is None:
-                    continue
-                
-                # Calculate core children sum (excluding overlays for allocation consistency)
-                core_children_sum = 0.0
-                for child_id in children:
-                    if child_id not in self._components_info:
-                        continue
-                    
-                    child_info = self._components_info[child_id]
-                    child_weight = child_info.get(weight_key, 0.0)
-                    
-                    # Include in core sum based on overlay status
-                    if not child_info.get('is_overlay', False) and child_weight is not None:
-                        if self.short_aggregation_mode == "include":
-                            core_children_sum += child_weight
-                        elif child_weight >= 0:
-                            core_children_sum += child_weight
-                
-                # Verify consistency with tight tolerance
-                if abs(parent_weight - core_children_sum) > tolerance:
-                    # This should not happen with proportional rebasing
-                    import warnings
-                    warnings.warn(
-                        f"Post-rebase consistency issue for {parent_id} ({weight_side}): "
-                        f"parent={parent_weight:.12f}, core_children_sum={core_children_sum:.12f}, "
-                        f"diff={abs(parent_weight - core_children_sum):.2e}"
-                    )
     
     def _get_topological_order(self) -> List[str]:
         """Get topological ordering of components for weight propagation."""
@@ -1304,6 +1179,13 @@ class PortfolioBuilder:
         """Check if component is a leaf (has no children)."""
         for parent_id, child_id in self._edges:
             if parent_id == component_id:
+                return False
+        return True
+    
+    def _is_root_component(self, component_id: str) -> bool:
+        """Check if component is a root (has no parents)."""
+        for parent_id, child_id in self._edges:
+            if child_id == component_id:
                 return False
         return True
     
@@ -1347,7 +1229,7 @@ class PortfolioBuilder:
                 self._components_info[parent_id][weight_key] = core_sum
     
     def _calculate_relative_weights(self, parent_id: str) -> None:
-        """Calculate relative weights for children to ensure multiplication consistency."""
+        """Calculate relative weights for children and replace absolute weights with relative weights."""
         children = self._get_direct_children(parent_id)
         if not children:
             return
@@ -1358,10 +1240,24 @@ class PortfolioBuilder:
             operational_key = f'{weight_side}_operational_weight'
             
             parent_info = self._components_info.get(parent_id, {})
-            parent_weight = parent_info.get(weight_key, 0.0)
-            if parent_weight is None:
-                parent_weight = 0.0
             
+            # Get the current absolute weight of parent (this was calculated in bottom-up phase)
+            parent_weight = parent_info.get(weight_key, 0.0)
+            if parent_weight is None or parent_weight == 0.0:
+                parent_weight = 1.0 if self._is_root_component(parent_id) else 0.0
+            
+            # Calculate the sum of children's absolute weights (core only, excluding overlays)
+            core_children_sum = 0.0
+            for child_id in children:
+                if child_id not in self._components_info:
+                    continue
+                child_info = self._components_info[child_id]
+                if not child_info.get('is_overlay', False):
+                    child_weight = child_info.get(weight_key, 0.0)
+                    if child_weight is not None:
+                        core_children_sum += child_weight
+            
+            # Convert children to relative weights (as share of their sum, not parent weight)
             for child_id in children:
                 if child_id not in self._components_info:
                     continue
@@ -1372,8 +1268,10 @@ class PortfolioBuilder:
                 if child_info.get('is_overlay', False):
                     # Overlay position handling
                     if self.overlay_weight_mode == "dual":
-                        # Dual mode: allocation weight = 0, operational weight = first non-overlay ancestor
-                        child_info[relative_key] = 0.0
+                        # Dual mode: allocation weight = 0, operational weight = parent weight
+                        relative_weight = 0.0
+                        child_info[relative_key] = relative_weight
+                        child_info[weight_key] = relative_weight
                         
                         # Find first non-overlay ancestor for operational weight
                         operational_weight = self._find_operational_parent_weight(parent_id, weight_side)
@@ -1381,16 +1279,21 @@ class PortfolioBuilder:
                         child_info[f'{weight_side}_operational_relative'] = 1.0
                     else:
                         # Allocation only mode: treat as regular position
-                        if parent_weight != 0:
-                            child_info[relative_key] = child_absolute / parent_weight
+                        if core_children_sum != 0:
+                            relative_weight = child_absolute / core_children_sum
                         else:
-                            child_info[relative_key] = 0.0
+                            relative_weight = 0.0
+                        child_info[relative_key] = relative_weight
+                        child_info[weight_key] = relative_weight
                 else:
-                    # Regular position: calculate relative weight
-                    if parent_weight != 0:
-                        child_info[relative_key] = child_absolute / parent_weight
+                    # Regular position: calculate relative weight as share of core children sum
+                    if core_children_sum != 0:
+                        relative_weight = child_absolute / core_children_sum
                     else:
-                        child_info[relative_key] = 0.0
+                        relative_weight = 0.0
+                    
+                    child_info[relative_key] = relative_weight
+                    child_info[weight_key] = relative_weight  # Replace absolute with relative
     
     def _find_operational_parent_weight(self, component_id: str, weight_side: str) -> float:
         """Find the first non-overlay ancestor's weight for operational weight calculation."""
