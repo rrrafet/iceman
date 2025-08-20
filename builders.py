@@ -13,97 +13,59 @@ from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from .graph import PortfolioGraph
-    from .metrics import MetricStore, ValidationIssue
+    from .metrics import MetricStore
 
-from .metrics import InMemoryMetricStore, ValidationIssue, WeightPathAggregator, WeightPathAggregatorSum
+from .metrics import InMemoryMetricStore, WeightPathAggregator, WeightPathAggregatorSum
 
 
 class PortfolioBuilder:
     """
-    Builder class for constructing portfolio + benchmark hierarchies with enhanced features.
+    Builder class for constructing hierarchical portfolios with automatic weight normalization.
     
-    Supports:
-    - Hierarchical dict and path-based row inputs
-    - Portfolio + benchmark weights with relative/absolute types
-    - Leverage and short positions (weights need not sum to 1.0)
-    - Multiple reconciliation policies and auto-balance modes
-    - Dual aggregation strategies (product/sum) with auto-selection
-    - Comprehensive validation and export capabilities
+    Core Features:
+    - Path-based component addition with hierarchical structure
+    - Automatic weight normalization for WeightPathAggregator compatibility  
+    - Support for overlay strategies and short positions
+    - Portfolio + benchmark weight tracking
+    - Hierarchical dict and path-based data input methods
     """
     
     def __init__(self,
                  *,
-                 normalize: bool = True,
                  allow_shorts: bool = False,
-                 enforce_sum_to_one: bool = False,
-                 target_net_exposure: Optional[float] = None,
-                 max_gross_exposure: Optional[float] = None,
-                 auto_balance: Literal["none", "synthetic_financing", "normalize"] = "none",
-                 financing_component_id: str = "__financing__",
-                 reconcile_policy: Literal["respect_parent", "respect_children", "error"] = "respect_parent",
-                 reconcile_policy_benchmark: Optional[Literal["respect_parent", "respect_children", "error"]] = None,
-                 propagation_strategy: Literal["auto", "product", "sum"] = "auto",
                  auto_normalize_hierarchy: bool = True,
                  overlay_weight_mode: Literal["dual", "allocation_only"] = "dual",
-                 short_aggregation_mode: Literal["include", "separate"] = "include",
                  tol: float = 1e-8,
                  delimiter: str = "/",
                  root_id: str = 'portfolio',
                  metric_store: Optional['MetricStore'] = None):
         """
-        Initialize the enhanced portfolio builder.
+        Initialize the portfolio builder.
         
         Parameters
         ----------
-        normalize : bool, default True
-            Whether to normalize weights (only used when normalization is explicitly enabled)
         allow_shorts : bool, default False
             Whether to allow negative weights
-        enforce_sum_to_one : bool, default False
-            If True, force per-parent relative sums to 1
-        target_net_exposure : float, optional
-            Target net exposure (e.g., 1.0). Used with auto_balance modes
-        max_gross_exposure : float, optional
-            Optional maximum gross exposure guard
-        auto_balance : {"none", "synthetic_financing", "normalize"}, default "none"
-            Auto-balance mode for target net exposure
-        financing_component_id : str, default "__financing__"
-            ID for synthetic financing component
-        reconcile_policy : {"respect_parent", "respect_children", "error"}, default "respect_parent"
-            Policy for reconciling weight mismatches
-        reconcile_policy_benchmark : {"respect_parent", "respect_children", "error"}, optional
-            Override reconcile_policy for benchmark side
-        propagation_strategy : {"auto", "product", "sum"}, default "auto"
-            Weight aggregation strategy selection
         auto_normalize_hierarchy : bool, default True
-            Enable automatic weight normalization to ensure WeightPathAggregator consistency
+            Enable automatic weight normalization to ensure descendants are
+            properly normalized as their share of parents for WeightPathAggregator
         overlay_weight_mode : {"dual", "allocation_only"}, default "dual"
-            How to handle overlay position weights: dual tracking or allocation only
-        short_aggregation_mode : {"include", "separate"}, default "include"
-            Whether to include short positions in parent weight aggregation
+            How to handle overlay position weights:
+            - "dual": Track both allocation (0.0) and operational weights
+            - "allocation_only": Treat overlays as regular allocations
         tol : float, default 1e-8
-            Numerical tolerance for validations
+            Numerical tolerance for validations and comparisons
         delimiter : str, default "/"
-            Path delimiter character
+            Path delimiter character for hierarchical paths
         root_id : str, default 'portfolio'
             ID for the root component
         metric_store : MetricStore, optional
             Metric store to use. If None, creates new InMemoryMetricStore
         """
         # Configuration parameters
-        self.normalize = normalize
         self.allow_shorts = allow_shorts
-        self.enforce_sum_to_one = enforce_sum_to_one
-        self.target_net_exposure = target_net_exposure
-        self.max_gross_exposure = max_gross_exposure
-        self.auto_balance = auto_balance
-        self.financing_component_id = financing_component_id
-        self.reconcile_policy = reconcile_policy
-        self.reconcile_policy_benchmark = reconcile_policy_benchmark or reconcile_policy
-        self.propagation_strategy = propagation_strategy
         self.auto_normalize_hierarchy = auto_normalize_hierarchy
         self.overlay_weight_mode = overlay_weight_mode
-        self.short_aggregation_mode = short_aggregation_mode
         self.tol = tol
         self.delimiter = delimiter
         self.root_id = root_id
@@ -112,8 +74,6 @@ class PortfolioBuilder:
         # Internal storage
         self._components_info = {}  # Store component info before building graph
         self._edges = []  # Store edge relationships
-        self._weight_hierarchy = {}  # Store hierarchical weight structure
-        self._templates = {}  # Store reusable templates
         
     def add_path(self, 
                  path: str, 
@@ -179,8 +139,8 @@ class PortfolioBuilder:
                 'id': current_path,
                 'name': comp_name,
                 'type': comp_type,
-                'portfolio_weight': portfolio_weight if is_leaf else None,
-                'benchmark_weight': benchmark_weight if is_leaf else 0.0,
+                'portfolio_weight': portfolio_weight,
+                'benchmark_weight': benchmark_weight,
                 'data': data if is_leaf else None,
                 'path_parts': path_parts[:i+1],
                 'is_overlay': is_overlay if is_leaf else False
@@ -261,180 +221,10 @@ class PortfolioBuilder:
         PortfolioBuilder
             Self for method chaining
         """
-        self._clear_internal_state()
+        self._components_info.clear()
+        self._edges.clear()
         return self
     
-    def add_relative_weights(self, weight_hierarchy: Dict[str, Any]) -> 'PortfolioBuilder':
-        """
-        Add hierarchical weight structure with relative weights that auto-normalize.
-        
-        Parameters
-        ----------
-        weight_hierarchy : dict
-            Nested dictionary defining relative weights:
-            {
-                "equity": {
-                    "portfolio_weight": 0.7,
-                    "benchmark_weight": 0.6,
-                    "children": {
-                        "us": {"relative_portfolio": 0.65, "relative_benchmark": 0.70},
-                        "international": {"relative_portfolio": 0.35, "relative_benchmark": 0.30}
-                    }
-                }
-            }
-            
-        Returns
-        -------
-        PortfolioBuilder
-            Self for method chaining
-        """
-        self._weight_hierarchy.update(weight_hierarchy)
-        return self
-    
-    def add_template(self, name: str, template: Dict[str, Any]) -> 'PortfolioBuilder':
-        """
-        Add a reusable template for hierarchy construction.
-        
-        Parameters
-        ----------
-        name : str
-            Template name
-        template : dict
-            Template structure defining hierarchy pattern
-            
-        Returns
-        -------
-        PortfolioBuilder
-            Self for method chaining
-        """
-        self._templates[name] = template
-        return self
-    
-    def apply_template(self, 
-                      base_path: str, 
-                      template_name: str,
-                      scale_portfolio: float = 1.0,
-                      scale_benchmark: float = 1.0) -> 'PortfolioBuilder':
-        """
-        Apply a template to create hierarchy structure under a base path.
-        
-        Parameters
-        ----------
-        base_path : str
-            Base path to apply template under
-        template_name : str
-            Name of template to apply
-        scale_portfolio : float, default 1.0
-            Scaling factor for portfolio weights
-        scale_benchmark : float, default 1.0
-            Scaling factor for benchmark weights
-            
-        Returns
-        -------
-        PortfolioBuilder
-            Self for method chaining
-        """
-        if template_name not in self._templates:
-            raise ValueError(f"Template '{template_name}' not found")
-        
-        template = self._templates[template_name]
-        self._apply_template_recursive(base_path, template, scale_portfolio, scale_benchmark)
-        return self
-    
-    def _apply_template_recursive(self, 
-                                 base_path: str, 
-                                 template: Dict[str, Any],
-                                 scale_portfolio: float,
-                                 scale_benchmark: float):
-        """Recursively apply template structure."""
-        for key, value in template.items():
-            current_path = f"{base_path}/{key}" if base_path else key
-            
-            if isinstance(value, dict):
-                if 'children' in value:
-                    # This is a node with children
-                    port_weight = value.get('portfolio_weight', 0.0) * scale_portfolio
-                    bench_weight = value.get('benchmark_weight', 0.0) * scale_benchmark
-                    
-                    self.add_path(current_path, 
-                                portfolio_weight=port_weight,
-                                benchmark_weight=bench_weight,
-                                component_type='node')
-                    
-                    # Recursively apply children
-                    self._apply_template_recursive(current_path, value['children'], 
-                                                 scale_portfolio, scale_benchmark)
-                else:
-                    # This is a leaf with weight value
-                    if isinstance(value, (int, float)):
-                        self.add_path(current_path,
-                                    portfolio_weight=value * scale_portfolio,
-                                    benchmark_weight=value * scale_benchmark,
-                                    component_type='leaf')
-                    else:
-                        # Value is a dict with portfolio/benchmark weights
-                        port_weight = value.get('portfolio_weight', 0.0) * scale_portfolio
-                        bench_weight = value.get('benchmark_weight', 0.0) * scale_benchmark
-                        
-                        self.add_path(current_path,
-                                    portfolio_weight=port_weight,
-                                    benchmark_weight=bench_weight,
-                                    component_type='leaf')
-    
-    def _normalize_relative_weights(self):
-        """Normalize relative weights to absolute weights."""
-        def process_hierarchy(hierarchy_dict, parent_portfolio_weight=1.0, parent_benchmark_weight=1.0, base_path=""):
-            for key, value in hierarchy_dict.items():
-                current_path = f"{base_path}/{key}" if base_path else key
-                
-                # Get absolute weights for this component
-                port_weight = value.get('portfolio_weight', parent_portfolio_weight)
-                bench_weight = value.get('benchmark_weight', parent_benchmark_weight)
-                
-                # Create or update component info
-                if current_path not in self._components_info:
-                    # Create component if it doesn't exist
-                    child_parts = current_path.split('/')
-                    self._components_info[current_path] = {
-                        'id': current_path,
-                        'name': key,
-                        'type': 'node' if 'children' in value else 'leaf',
-                        'portfolio_weight': port_weight,
-                        'benchmark_weight': bench_weight,
-                        'data': None,
-                        'path_parts': child_parts
-                    }
-                    
-                    # Add edge to parent if not root
-                    if base_path:
-                        self._edges.append((base_path, current_path))
-                else:
-                    # Update existing component weights
-                    self._components_info[current_path]['portfolio_weight'] = port_weight
-                    self._components_info[current_path]['benchmark_weight'] = bench_weight
-                
-                # Process children if they exist
-                if 'children' in value:
-                    for child_key, child_value in value['children'].items():
-                        child_path = f"{current_path}/{child_key}"
-                        
-                        # Calculate absolute weights from relative weights
-                        rel_port = child_value.get('relative_portfolio', 1.0)
-                        rel_bench = child_value.get('relative_benchmark', 1.0)
-                        
-                        abs_port = port_weight * rel_port
-                        abs_bench = bench_weight * rel_bench
-                        
-                        # Create child_value copy with absolute weights for recursion
-                        child_value_copy = child_value.copy()
-                        child_value_copy['portfolio_weight'] = abs_port
-                        child_value_copy['benchmark_weight'] = abs_bench
-                        
-                        # Recursively process this child
-                        process_hierarchy({child_key: child_value_copy}, abs_port, abs_bench, current_path)
-        
-        if self._weight_hierarchy:
-            process_hierarchy(self._weight_hierarchy)
     
     def build(self) -> 'PortfolioGraph':
         """
@@ -448,15 +238,11 @@ class PortfolioBuilder:
         # Import here to avoid circular imports
         from .graph import PortfolioGraph
         
-        # Auto-normalize weights first (if enabled)
+        # Validate basic constraints
+        self._validate_shorts()
+        
+        # Auto-normalize weights (if enabled)
         self._auto_normalize_weights()
-        
-        # Validate and reconcile weights (skip if auto-normalized)
-        if not self.auto_normalize_hierarchy:
-            self._validate_and_reconcile_weights()
-        
-        # Normalize relative weights first
-        self._normalize_relative_weights()
         
         # Create the graph
         graph = PortfolioGraph(root_id=self.root_id, metric_store=self.metric_store)
@@ -633,159 +419,12 @@ class PortfolioBuilder:
         graph.was_auto_normalized = was_auto_normalized
         graph.get_weight_summary = get_weight_summary
     
-    def validate_weights(self) -> Tuple[bool, List[str]]:
-        """
-        Validate weight consistency across the hierarchy.
-        
-        Returns
-        -------
-        tuple
-            (is_valid, list_of_issues)
-        """
-        issues = []
-        
-        # Group components by parent
-        children_by_parent = {}
-        for parent_id, child_id in self._edges:
-            if parent_id not in children_by_parent:
-                children_by_parent[parent_id] = []
-            children_by_parent[parent_id].append(child_id)
-        
-        # Check weight consistency for each parent
-        for parent_id, child_ids in children_by_parent.items():
-            if parent_id not in self._components_info:
-                continue
-                
-            parent_info = self._components_info[parent_id]
-            parent_port_weight = parent_info.get('portfolio_weight', 0.0)
-            parent_bench_weight = parent_info.get('benchmark_weight', 0.0)
-            
-            # Sum child weights
-            child_port_sum = 0.0
-            child_bench_sum = 0.0
-            
-            for child_id in child_ids:
-                if child_id in self._components_info:
-                    child_info = self._components_info[child_id]
-                    child_port_weight = child_info.get('portfolio_weight')
-                    child_bench_weight = child_info.get('benchmark_weight')
-                    
-                    if child_port_weight is not None:
-                        child_port_sum += child_port_weight
-                    if child_bench_weight is not None:
-                        child_bench_sum += child_bench_weight
-            
-            # Check consistency
-            if parent_port_weight and abs(child_port_sum - parent_port_weight) > 1e-6:
-                issues.append(f"Portfolio weight mismatch for {parent_id}: "
-                            f"parent={parent_port_weight:.6f}, children_sum={child_port_sum:.6f}")
-            
-            if parent_bench_weight and abs(child_bench_sum - parent_bench_weight) > 1e-6:
-                issues.append(f"Benchmark weight mismatch for {parent_id}: "
-                            f"parent={parent_bench_weight:.6f}, children_sum={child_bench_sum:.6f}")
-        
-        return len(issues) == 0, issues
     
-    def validate(self, graph: "PortfolioGraph") -> List["ValidationIssue"]:
-        """
-        Validate portfolio graph for consistency and constraints.
-        
-        Parameters
-        ----------
-        graph : PortfolioGraph
-            Graph to validate
-            
-        Returns
-        -------
-        list of ValidationIssue
-            List of validation issues found
-        """
-        issues = []
-        
-        # Basic structure validation
-        issues.extend(self._validate_structure(graph))
-        
-        # Weight consistency validation
-        issues.extend(self._validate_weights(graph))
-        
-        # Exposure limits validation
-        issues.extend(self._validate_exposures(graph))
-        
-        # Leverage/shorts validation
-        issues.extend(self._validate_leverage_shorts(graph))
-        
-        return issues
-    
-    def to_paths(self, graph: "PortfolioGraph") -> List[Dict[str, Any]]:
-        """
-        Export PortfolioGraph to path-based row format.
-        
-        Parameters
-        ----------
-        graph : PortfolioGraph
-            Graph to export
-            
-        Returns
-        -------
-        list of dict
-            Path-based row data
-        """
-        rows = []
-        
-        for component_id, component in graph.components.items():
-            # Build path by traversing parents
-            path = self._build_component_path(component_id, graph)
-            
-            # Get weights
-            portfolio_weight = self._get_component_weight(component, 'portfolio_weight')
-            benchmark_weight = self._get_component_weight(component, 'benchmark_weight')
-            
-            # Create row
-            row = {
-                'type': 'leaf' if component.is_leaf() else 'node',
-                'path': path,
-                'component_id': component_id,
-                'portfolio_weight': portfolio_weight,
-                'portfolio_weight_type': 'absolute',  # Default for export
-                'benchmark_weight': benchmark_weight,
-                'benchmark_weight_type': 'absolute',  # Default for export
-                'meta': getattr(component, 'data', None)
-            }
-            rows.append(row)
-            
-        return rows
-    
-    def to_hierarchy(self, graph: "PortfolioGraph") -> Dict[str, Any]:
-        """
-        Export PortfolioGraph to hierarchical dictionary format.
-        
-        Parameters
-        ----------
-        graph : PortfolioGraph
-            Graph to export
-            
-        Returns
-        -------
-        dict
-            Hierarchical dictionary structure
-        """
-        # Find root component
-        root_component = None
-        for component in graph.components.values():
-            if len(component.parent_ids) == 0:
-                root_component = component
-                break
-        
-        if root_component is None:
-            raise ValueError("No root component found in graph")
-        
-        return self._build_hierarchy_node(root_component, graph)
     
     def _clear_internal_state(self) -> None:
         """Clear all internal state for a fresh build."""
         self._components_info.clear()
         self._edges.clear()
-        self._weight_hierarchy.clear()
     
     def _process_hierarchy_node(self, node_data: Dict[str, Any], path_prefix: str) -> None:
         """Process a hierarchical node and its children recursively."""
@@ -847,243 +486,8 @@ class PortfolioBuilder:
                 if edge not in self._edges:
                     self._edges.append(edge)
     
-    def _validate_and_reconcile_weights(self) -> None:
-        """Validate and reconcile weights according to policies."""
-        # Apply reconciliation policies
-        self._reconcile_weight_mismatches()
-        
-        # Apply auto-balance if configured
-        if self.auto_balance != "none":
-            self._apply_auto_balance()
-        
-        # Validate final weights
-        self._validate_final_weights()
-    
-    def _reconcile_weight_mismatches(self) -> None:
-        """Reconcile weight mismatches according to reconcile policies."""
-        # Group components by parent to check for weight consistency
-        parent_children = {}
-        for parent_path, child_path in self._edges:
-            if parent_path not in parent_children:
-                parent_children[parent_path] = []
-            parent_children[parent_path].append(child_path)
-        
-        for parent_path, child_paths in parent_children.items():
-            if parent_path not in self._components_info:
-                continue
-                
-            parent_info = self._components_info[parent_path]
-            
-            # Check both portfolio and benchmark sides
-            for weight_side in ['portfolio', 'benchmark']:
-                policy = self.reconcile_policy_benchmark if weight_side == 'benchmark' else self.reconcile_policy
-                self._reconcile_weight_side(parent_path, child_paths, weight_side, policy)
-    
-    def _reconcile_weight_side(self, parent_path: str, child_paths: List[str], weight_side: str, policy: str) -> None:
-        """Reconcile weights for a specific side (portfolio or benchmark)."""
-        parent_info = self._components_info[parent_path]
-        weight_key = f'{weight_side}_weight'
-        weight_type_key = f'{weight_side}_weight_type'
-        
-        parent_weight = parent_info.get(weight_key)
-        parent_weight_type = parent_info.get(weight_type_key, 'absolute')
-        
-        # Get children weights
-        children_weights = []
-        children_weight_types = []
-        
-        for child_path in child_paths:
-            if child_path in self._components_info:
-                child_info = self._components_info[child_path]
-                children_weights.append(child_info.get(weight_key, 0.0))
-                children_weight_types.append(child_info.get(weight_type_key, 'absolute'))
-        
-        if not children_weights:
-            return
-        
-        # Handle edge case: all children weights are None or zero
-        all_zero_or_none = all(w is None or w == 0.0 for w in children_weights)
-        if all_zero_or_none and not self.enforce_sum_to_one:
-            return  # Skip if not enforcing constraints
-        elif all_zero_or_none and self.enforce_sum_to_one and all(wt == 'relative' for wt in children_weight_types):
-            # Special case: enforce_sum_to_one with all zero relative weights
-            raise ValueError(
-                f"Relative weights for {parent_path} ({weight_side}) sum to 0.0, "
-                f"which violates enforce_sum_to_one constraint"
-            )
-        
-        # Handle relative vs absolute weight reconciliation
-        if parent_weight_type == 'absolute' and all(wt == 'relative' for wt in children_weight_types):
-            # Parent absolute, children relative: derive child absolutes
-            if parent_weight is not None:
-                for i, child_path in enumerate(child_paths):
-                    if child_path in self._components_info:
-                        child_rel_weight = children_weights[i]
-                        child_abs_weight = parent_weight * child_rel_weight
-                        self._components_info[child_path][weight_key] = child_abs_weight
-                        self._components_info[child_path][weight_type_key] = 'absolute'
-        
-        elif parent_weight_type == 'relative' and all(wt == 'absolute' for wt in children_weight_types):
-            # Children absolute, parent relative: this shouldn't happen at root level, handle carefully
-            pass
-        
-        elif parent_weight_type == 'absolute' and all(wt == 'absolute' for wt in children_weight_types):
-            # Both absolute: check for mismatches and reconcile (exclude overlays from allocation calculations)
-            # Calculate sum only for core (non-overlay) children
-            core_children_sum = 0.0
-            core_child_indices = []
-            
-            for i, child_path in enumerate(child_paths):
-                if child_path in self._components_info:
-                    child_info = self._components_info[child_path]
-                    if not child_info.get('is_overlay', False) and children_weights[i] is not None:
-                        core_children_sum += children_weights[i]
-                        core_child_indices.append(i)
-            
-            if parent_weight is not None and abs(core_children_sum - parent_weight) > self.tol:
-                # Mismatch detected, apply reconciliation policy (only to core children)
-                if policy == "respect_parent":
-                    # Scale core children to match parent (overlays unchanged)
-                    if core_children_sum > 0:
-                        scale_factor = parent_weight / core_children_sum
-                        for i in core_child_indices:
-                            child_path = child_paths[i]
-                            if child_path in self._components_info and children_weights[i] is not None:
-                                self._components_info[child_path][weight_key] = children_weights[i] * scale_factor
-                
-                elif policy == "respect_children":
-                    # Update parent to match core children sum (excluding overlays)
-                    self._components_info[parent_path][weight_key] = core_children_sum
-                
-                elif policy == "error":
-                    # Raise error for mismatch
-                    raise ValueError(
-                        f"Weight mismatch for {parent_path} ({weight_side}): "
-                        f"parent={parent_weight}, core_children_sum={core_children_sum}"
-                    )
-        
-        # Handle relative weight normalization - exclude overlay strategies
-        if all(wt == 'relative' for wt in children_weight_types):
-            # Separate core and overlay children for normalization
-            core_weights = []
-            core_indices = []
-            overlay_indices = []
-            
-            for i, child_path in enumerate(child_paths):
-                if child_path in self._components_info:
-                    child_info = self._components_info[child_path]
-                    if child_info.get('is_overlay', False):
-                        overlay_indices.append(i)
-                    else:
-                        core_weights.append(children_weights[i] if children_weights[i] is not None else 0.0)
-                        core_indices.append(i)
-            
-            # Calculate normalization only for core (non-overlay) children
-            rel_sum = sum(core_weights)
-            
-            # Handle edge case: zero or very small sum for core children
-            if rel_sum <= self.tol:
-                if self.enforce_sum_to_one:
-                    raise ValueError(
-                        f"Core (non-overlay) relative weights for {parent_path} ({weight_side}) sum to {rel_sum}, "
-                        f"which is too small for normalization (tolerance: {self.tol})"
-                    )
-                return  # Cannot normalize zero weights
-            
-            # Check if normalization is needed for core children
-            needs_normalization = abs(rel_sum - 1.0) > self.tol
-            
-            if needs_normalization:
-                if self.normalize:
-                    # Normalize only core children weights to sum to 1.0
-                    for i in core_indices:
-                        child_path = child_paths[i]
-                        if child_path in self._components_info and children_weights[i] is not None:
-                            normalized_weight = children_weights[i] / rel_sum
-                            self._components_info[child_path][weight_key] = normalized_weight
-                    
-                    # Overlay children keep their allocation weight (0.0) unchanged
-                    # Their operational weight will be handled separately by the context system
-                    
-                elif self.enforce_sum_to_one:
-                    # Enforce sum to one without normalization: raise error
-                    raise ValueError(
-                        f"Core (non-overlay) relative weights for {parent_path} ({weight_side}) sum to {rel_sum}, "
-                        f"not 1.0 (tolerance: {self.tol})"
-                    )
-    
-    def _apply_auto_balance(self) -> None:
-        """Apply auto-balance mode if configured."""
-        if self.target_net_exposure is None:
-            return
-        
-        # Apply auto-balance to root level components
-        root_children = []
-        for parent_path, child_path in self._edges:
-            if parent_path == self.root_id or parent_path == "":
-                root_children.append(child_path)
-        
-        if not root_children:
-            return
-        
-        for weight_side in ['portfolio', 'benchmark']:
-            self._apply_auto_balance_side(root_children, weight_side)
-    
-    def _apply_auto_balance_side(self, components: List[str], weight_side: str) -> None:
-        """Apply auto-balance for a specific weight side."""
-        weight_key = f'{weight_side}_weight'
-        
-        # Calculate current net exposure
-        current_net = 0.0
-        for comp_path in components:
-            if comp_path in self._components_info:
-                weight = self._components_info[comp_path].get(weight_key, 0.0)
-                if weight is not None:
-                    current_net += weight
-        
-        net_diff = self.target_net_exposure - current_net
-        
-        if abs(net_diff) <= self.tol:
-            return  # Already at target
-        
-        if self.auto_balance == "synthetic_financing":
-            # Add synthetic financing component
-            financing_path = self.financing_component_id
-            
-            # Create financing component if it doesn't exist
-            if financing_path not in self._components_info:
-                self._components_info[financing_path] = {
-                    'id': self.financing_component_id,
-                    'name': 'Synthetic Financing',
-                    'type': 'leaf',
-                    'portfolio_weight': 0.0,
-                    'portfolio_weight_type': 'absolute',
-                    'benchmark_weight': 0.0,
-                    'benchmark_weight_type': 'absolute',
-                    'data': {'synthetic': True},
-                    'path_parts': [financing_path]
-                }
-                
-                # Add edge to root
-                self._edges.append((self.root_id, financing_path))
-            
-            # Set financing weight to balance to target
-            self._components_info[financing_path][weight_key] = net_diff
-        
-        elif self.auto_balance == "normalize":
-            # Normalize existing components proportionally
-            if current_net > 0 and self.target_net_exposure != 0:
-                scale_factor = self.target_net_exposure / current_net
-                
-                for comp_path in components:
-                    if comp_path in self._components_info:
-                        current_weight = self._components_info[comp_path].get(weight_key, 0.0)
-                        if current_weight is not None:
-                            self._components_info[comp_path][weight_key] = current_weight * scale_factor
-    
-    def _validate_final_weights(self) -> None:
-        """Validate final weights against constraints."""
-        # Validate shorts are allowed if present
+    def _validate_shorts(self) -> None:
+        """Validate that shorts are allowed if present."""
         if not self.allow_shorts:
             for comp_path, comp_info in self._components_info.items():
                 for weight_side in ['portfolio', 'benchmark']:
@@ -1092,41 +496,18 @@ class PortfolioBuilder:
                         raise ValueError(
                             f"Negative weight not allowed: {comp_path} {weight_side}={weight}"
                         )
-        
-        # Validate exposure limits if set
-        if self.max_gross_exposure is not None:
-            for weight_side in ['portfolio', 'benchmark']:
-                gross_exposure = self._calculate_gross_exposure(weight_side)
-                if gross_exposure > self.max_gross_exposure:
-                    raise ValueError(
-                        f"Gross exposure {gross_exposure:.4f} exceeds limit {self.max_gross_exposure:.4f} "
-                        f"for {weight_side}"
-                    )
-    
-    def _calculate_gross_exposure(self, weight_side: str) -> float:
-        """Calculate gross exposure for a weight side."""
-        weight_key = f'{weight_side}_weight'
-        gross_exposure = 0.0
-        
-        for comp_info in self._components_info.values():
-            weight = comp_info.get(weight_key, 0.0)
-            if weight is not None:
-                gross_exposure += abs(weight)
-        
-        return gross_exposure
     
     def _auto_normalize_weights(self) -> None:
         """
         Auto-normalize weights to ensure WeightPathAggregator consistency.
         
-        Phase 0: Preserve original weights for audit trail
         Phase 1: Bottom-up aggregation - calculate parent weights from children
         Phase 2: Top-down relative weight calculation for multiplication consistency
         """
         if not self.auto_normalize_hierarchy:
             return
         
-        # Phase 0: Store original weights before normalization
+        # Store original weights before normalization
         self._preserve_original_weights()
             
         # Phase 1: Bottom-up weight aggregation (leaves to root)
@@ -1142,6 +523,7 @@ class PortfolioBuilder:
         # Phase 2: Top-down relative weight calculation (root to leaves)
         for component_id in topo_order:  # Start from root
             self._calculate_relative_weights(component_id)
+    
     
     def _get_topological_order(self) -> List[str]:
         """Get topological ordering of components for weight propagation."""
@@ -1183,6 +565,13 @@ class PortfolioBuilder:
                 return False
         return True
     
+    def _is_root_component(self, component_id: str) -> bool:
+        """Check if component is a root (has no parents)."""
+        for parent_id, child_id in self._edges:
+            if child_id == component_id:
+                return False
+        return True
+    
     def _get_direct_children(self, component_id: str) -> List[str]:
         """Get direct children of a component."""
         children = []
@@ -1206,24 +595,20 @@ class PortfolioBuilder:
                 child_info = self._components_info[child_id]
                 child_weight = child_info.get(weight_key, 0.0)
                 
-                # Include in core sum based on configuration
+                # Include in core sum (exclude overlays, include all weights including shorts)
                 if child_info.get('is_overlay', False):
                     # Overlays don't contribute to parent allocation weight
                     continue
                 elif child_weight is not None:
-                    if self.short_aggregation_mode == "include":
-                        # Include shorts in parent weight calculation
-                        core_sum += child_weight
-                    elif child_weight >= 0:
-                        # Only include positive weights if separating shorts
-                        core_sum += child_weight
+                    # Always include all weights (including shorts) in parent calculation
+                    core_sum += child_weight
             
             # Set parent weight to core children sum
             if parent_id in self._components_info:
                 self._components_info[parent_id][weight_key] = core_sum
     
     def _calculate_relative_weights(self, parent_id: str) -> None:
-        """Calculate relative weights for children to ensure multiplication consistency."""
+        """Calculate relative weights for children and replace absolute weights with relative weights."""
         children = self._get_direct_children(parent_id)
         if not children:
             return
@@ -1234,10 +619,24 @@ class PortfolioBuilder:
             operational_key = f'{weight_side}_operational_weight'
             
             parent_info = self._components_info.get(parent_id, {})
-            parent_weight = parent_info.get(weight_key, 0.0)
-            if parent_weight is None:
-                parent_weight = 0.0
             
+            # Get the current absolute weight of parent (this was calculated in bottom-up phase)
+            parent_weight = parent_info.get(weight_key, 0.0)
+            if parent_weight is None or parent_weight == 0.0:
+                parent_weight = 1.0 if self._is_root_component(parent_id) else 0.0
+            
+            # Calculate the sum of children's absolute weights (core only, excluding overlays)
+            core_children_sum = 0.0
+            for child_id in children:
+                if child_id not in self._components_info:
+                    continue
+                child_info = self._components_info[child_id]
+                if not child_info.get('is_overlay', False):
+                    child_weight = child_info.get(weight_key, 0.0)
+                    if child_weight is not None:
+                        core_children_sum += child_weight
+            
+            # Convert children to relative weights (as share of their sum, not parent weight)
             for child_id in children:
                 if child_id not in self._components_info:
                     continue
@@ -1248,8 +647,10 @@ class PortfolioBuilder:
                 if child_info.get('is_overlay', False):
                     # Overlay position handling
                     if self.overlay_weight_mode == "dual":
-                        # Dual mode: allocation weight = 0, operational weight = first non-overlay ancestor
-                        child_info[relative_key] = 0.0
+                        # Dual mode: allocation weight = 0, operational weight = parent weight
+                        relative_weight = 0.0
+                        child_info[relative_key] = relative_weight
+                        child_info[weight_key] = relative_weight
                         
                         # Find first non-overlay ancestor for operational weight
                         operational_weight = self._find_operational_parent_weight(parent_id, weight_side)
@@ -1257,16 +658,21 @@ class PortfolioBuilder:
                         child_info[f'{weight_side}_operational_relative'] = 1.0
                     else:
                         # Allocation only mode: treat as regular position
-                        if parent_weight != 0:
-                            child_info[relative_key] = child_absolute / parent_weight
+                        if core_children_sum != 0:
+                            relative_weight = child_absolute / core_children_sum
                         else:
-                            child_info[relative_key] = 0.0
+                            relative_weight = 0.0
+                        child_info[relative_key] = relative_weight
+                        child_info[weight_key] = relative_weight
                 else:
-                    # Regular position: calculate relative weight
-                    if parent_weight != 0:
-                        child_info[relative_key] = child_absolute / parent_weight
+                    # Regular position: calculate relative weight as share of core children sum
+                    if core_children_sum != 0:
+                        relative_weight = child_absolute / core_children_sum
                     else:
-                        child_info[relative_key] = 0.0
+                        relative_weight = 0.0
+                    
+                    child_info[relative_key] = relative_weight
+                    child_info[weight_key] = relative_weight  # Replace absolute with relative
     
     def _find_operational_parent_weight(self, component_id: str, weight_side: str) -> float:
         """Find the first non-overlay ancestor's weight for operational weight calculation."""
@@ -1307,165 +713,7 @@ class PortfolioBuilder:
             # Add normalization metadata
             info['auto_normalized'] = True
     
-    def _validate_structure(self, graph: "PortfolioGraph") -> List["ValidationIssue"]:
-        """Validate basic graph structure."""
-        issues = []
-        
-        # Check for duplicate component IDs
-        component_ids = set()
-        for component_id in graph.components:
-            if component_id in component_ids:
-                issues.append(ValidationIssue(
-                    "duplicate_id",
-                    f"Duplicate component ID: {component_id}",
-                    path=component_id
-                ))
-            component_ids.add(component_id)
-        
-        # Check for missing parents
-        for parent_id, children in graph._adjacency_list.items():
-            if parent_id not in graph.components:
-                issues.append(ValidationIssue(
-                    "missing_parent",
-                    f"Parent component not found: {parent_id}",
-                    path=parent_id
-                ))
-        
-        # Check for circular dependencies
-        visited = set()
-        rec_stack = set()
-        
-        def has_cycle(node):
-            if node in rec_stack:
-                return True
-            if node in visited:
-                return False
-            
-            visited.add(node)
-            rec_stack.add(node)
-            
-            for neighbor in graph._adjacency_list.get(node, []):
-                if has_cycle(neighbor):
-                    return True
-            
-            rec_stack.remove(node)
-            return False
-        
-        for component_id in graph.components:
-            if component_id not in visited:
-                if has_cycle(component_id):
-                    issues.append(ValidationIssue(
-                        "circular_dependency",
-                        f"Circular dependency detected involving: {component_id}",
-                        path=component_id
-                    ))
-        
-        return issues
     
-    def _validate_weights(self, graph: "PortfolioGraph") -> List["ValidationIssue"]:
-        """Validate weight consistency."""
-        issues = []
-        
-        # Check for weight consistency between parent and children
-        for parent_id, children in graph._adjacency_list.items():
-            for weight_side in ['portfolio', 'benchmark']:
-                weight_metric_name = f'{weight_side}_weight'
-                
-                parent_metric = graph.metric_store.get_metric(parent_id, weight_metric_name)
-                parent_weight = parent_metric.value() if parent_metric else None
-                
-                children_sum = 0.0
-                for child_id in children:
-                    child_metric = graph.metric_store.get_metric(child_id, weight_metric_name)
-                    if child_metric:
-                        children_sum += child_metric.value()
-                
-                if parent_weight is not None and abs(children_sum - parent_weight) > self.tol:
-                    issues.append(ValidationIssue(
-                        "weight_mismatch",
-                        f"Weight mismatch: parent={parent_weight:.6f}, children_sum={children_sum:.6f}",
-                        path=parent_id,
-                        side=weight_side,
-                        severity="warning"
-                    ))
-        
-        return issues
-    
-    def _validate_exposures(self, graph: "PortfolioGraph") -> List["ValidationIssue"]:
-        """Validate exposure limits."""
-        issues = []
-        
-        if self.max_gross_exposure is not None:
-            for weight_side in ['portfolio', 'benchmark']:
-                weight_metric_name = f'{weight_side}_weight'
-                gross_exposure = 0.0
-                
-                for component_id in graph.components:
-                    weight_metric = graph.metric_store.get_metric(component_id, weight_metric_name)
-                    if weight_metric:
-                        gross_exposure += abs(weight_metric.value())
-                
-                if gross_exposure > self.max_gross_exposure:
-                    issues.append(ValidationIssue(
-                        "gross_exposure_exceeded",
-                        f"Gross exposure {gross_exposure:.4f} exceeds limit {self.max_gross_exposure:.4f}",
-                        side=weight_side
-                    ))
-        
-        if self.target_net_exposure is not None:
-            for weight_side in ['portfolio', 'benchmark']:
-                weight_metric_name = f'{weight_side}_weight'
-                net_exposure = 0.0
-                
-                for component_id in graph.components:
-                    weight_metric = graph.metric_store.get_metric(component_id, weight_metric_name)
-                    if weight_metric:
-                        net_exposure += weight_metric.value()
-                
-                if abs(net_exposure - self.target_net_exposure) > self.tol:
-                    issues.append(ValidationIssue(
-                        "net_exposure_mismatch",
-                        f"Net exposure {net_exposure:.4f} differs from target {self.target_net_exposure:.4f}",
-                        side=weight_side,
-                        severity="warning"
-                    ))
-        
-        return issues
-    
-    def _validate_leverage_shorts(self, graph: "PortfolioGraph") -> List["ValidationIssue"]:
-        """Validate leverage and shorts constraints."""
-        issues = []
-        
-        if not self.allow_shorts:
-            for component_id in graph.components:
-                for weight_side in ['portfolio', 'benchmark']:
-                    weight_metric_name = f'{weight_side}_weight'
-                    weight_metric = graph.metric_store.get_metric(component_id, weight_metric_name)
-                    
-                    if weight_metric and weight_metric.value() < -self.tol:
-                        issues.append(ValidationIssue(
-                            "negative_weight_not_allowed",
-                            f"Negative weight detected: {weight_metric.value():.6f}",
-                            path=component_id,
-                            side=weight_side
-                        ))
-        
-        return issues
-    
-    def _build_component_path(self, component_id: str, graph: "PortfolioGraph") -> str:
-        """Build full path for a component."""
-        # Path building logic would go here
-        return component_id  # Placeholder
-    
-    def _get_component_weight(self, component, weight_type: str) -> Optional[float]:
-        """Get weight for a component."""
-        # Weight extraction logic would go here
-        return None  # Placeholder
-    
-    def _build_hierarchy_node(self, component, graph: "PortfolioGraph") -> Dict[str, Any]:
-        """Build hierarchical node structure."""
-        # Hierarchy building logic would go here
-        return {}  # Placeholder
 
 
 def create_graph_from_dataframe(df: pd.DataFrame, root_id: str = 'portfolio', metric_store: Optional['MetricStore'] = None) -> 'PortfolioGraph':
