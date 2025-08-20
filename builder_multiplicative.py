@@ -465,7 +465,11 @@ class PortfolioBuilderMultiplicative:
         for key, value in data.items():
             try:
                 # Determine metric type based on value
-                if isinstance(value, (list, tuple)):
+                if isinstance(value, pd.Series):
+                    # Already a pandas Series - use directly
+                    metric = SeriesMetric(value)
+                    graph.metric_store.set_metric(component_id, key, metric)
+                elif isinstance(value, (list, tuple)):
                     # Time series data (e.g., portfolio returns)
                     if len(value) > 0:
                         # Convert to pandas Series for SeriesMetric
