@@ -454,6 +454,40 @@ class PortfolioBuilderMultiplicative:
                     
             # Overlays keep their absolute weights for operational tracking
     
+    def _store_data_as_metrics(self, graph: 'PortfolioGraph', component_id: str, data: dict) -> None:
+        """Store data dict entries as metrics in the metric store."""
+        if not data:
+            return
+            
+        from .metrics import ScalarMetric, SeriesMetric
+        import pandas as pd
+        
+        for key, value in data.items():
+            try:
+                # Determine metric type based on value
+                if isinstance(value, (list, tuple)):
+                    # Time series data (e.g., portfolio returns)
+                    if len(value) > 0:
+                        # Convert to pandas Series for SeriesMetric
+                        series = pd.Series(value, name=key)
+                        metric = SeriesMetric(series)
+                        graph.metric_store.set_metric(component_id, key, metric)
+                elif isinstance(value, (int, float)):
+                    # Scalar data
+                    metric = ScalarMetric(float(value))
+                    graph.metric_store.set_metric(component_id, key, metric)
+                elif isinstance(value, str):
+                    # String data - store as object metric for now
+                    # Skip strings as metrics are typically numeric
+                    continue
+                else:
+                    # Skip complex objects for now
+                    continue
+                    
+            except Exception:
+                # If metric creation fails, silently skip to avoid breaking the build
+                continue
+    
     def _create_graph(self) -> 'PortfolioGraph':
         """Create the PortfolioGraph from processed component data."""
         # Import here to avoid circular imports
@@ -511,6 +545,9 @@ class PortfolioBuilderMultiplicative:
                     component_id, 'is_overlay',
                     ScalarMetric(1.0)
                 )
+            
+            # Store additional metrics from data dict
+            self._store_data_as_metrics(graph, component_id, comp_info['data'])
         
         # Create edges and connect to root if needed
         self._create_graph_edges(graph)
