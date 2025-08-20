@@ -34,6 +34,14 @@ class DecisionType(Enum):
     SCALE = "scale"                  # Scale up/down a component
 
 
+class WeightChangeType(Enum):
+    """Types of weight changes"""
+    DIRECT = "direct"                    # Explicitly specified in decision
+    PROPAGATED_UP = "propagated_up"      # Bottom-up propagation (leaf→ancestors)  
+    PROPAGATED_DOWN = "propagated_down"  # Top-down propagation (node→descendants)
+    NORMALIZATION = "normalization"      # Due to hierarchy re-normalization
+
+
 @dataclass
 class WeightChange:
     """Represents a weight change for a component"""
@@ -42,6 +50,19 @@ class WeightChange:
     portfolio_weight_after: float
     benchmark_weight_before: float
     benchmark_weight_after: float
+    change_type: WeightChangeType = WeightChangeType.DIRECT
+    
+    # Original context weights (if applicable)
+    portfolio_weight_original_before: Optional[float] = None
+    portfolio_weight_original_after: Optional[float] = None
+    benchmark_weight_original_before: Optional[float] = None
+    benchmark_weight_original_after: Optional[float] = None
+    
+    # Overlay operational weights (if applicable)
+    portfolio_operational_weight_before: Optional[float] = None
+    portfolio_operational_weight_after: Optional[float] = None
+    benchmark_operational_weight_before: Optional[float] = None
+    benchmark_operational_weight_after: Optional[float] = None
     
     @property
     def portfolio_change(self) -> float:
@@ -67,6 +88,20 @@ class WeightChange:
     def active_weight_change(self) -> float:
         """Change in active weight"""
         return self.active_weight_after - self.active_weight_before
+    
+    @property 
+    def portfolio_original_change(self) -> Optional[float]:
+        """Original portfolio weight change (if tracked)"""
+        if self.portfolio_weight_original_before is not None and self.portfolio_weight_original_after is not None:
+            return self.portfolio_weight_original_after - self.portfolio_weight_original_before
+        return None
+    
+    @property
+    def portfolio_operational_change(self) -> Optional[float]:
+        """Operational portfolio weight change (if applicable for overlays)"""
+        if self.portfolio_operational_weight_before is not None and self.portfolio_operational_weight_after is not None:
+            return self.portfolio_operational_weight_after - self.portfolio_operational_weight_before
+        return None
 
 
 class PortfolioDecision:
@@ -521,7 +556,7 @@ class HierarchicalDecisionAnalyzer:
         decision: PortfolioDecision
     ) -> Tuple['PortfolioGraph', Dict[str, WeightChange]]:
         """
-        Apply decision to portfolio graph and propagate weight changes through hierarchy.
+        Apply decision to portfolio graph and propagate weight changes bidirectionally through hierarchy.
         
         Parameters
         ----------
@@ -538,63 +573,258 @@ class HierarchicalDecisionAnalyzer:
         # Create a deep copy of the graph to avoid modifying the original
         modified_graph = self._create_graph_copy(graph)
         
-        # Track all weight changes (direct + propagated)
-        all_weight_changes = {}
-        
-        # Apply direct weight changes from the decision
+        # Step 1: Apply direct weight changes from the decision
+        self.logger.debug("Applying direct weight changes")
         for comp_id, weight_change in decision.weight_changes.items():
             self._apply_weight_change_to_graph(modified_graph, weight_change)
-            all_weight_changes[comp_id] = weight_change
         
-        # Use WeightPathAggregator to determine affected descendants
-        weight_service = modified_graph.create_weight_service()
+        # Step 2: Trigger hierarchy re-normalization for consistency
+        self.logger.debug("Triggering hierarchy re-normalization")
+        self._trigger_hierarchy_renormalization(modified_graph)
         
-        # For each directly modified component, find affected descendants
-        for comp_id in decision.weight_changes.keys():
-            affected_descendants = self._get_affected_descendants(
-                modified_graph, comp_id, weight_service
-            )
-            decision.affected_descendants.extend(affected_descendants)
-            
-            # Calculate propagated weight changes for descendants
-            propagated_changes = self._calculate_propagated_changes(
-                graph, modified_graph, affected_descendants
-            )
-            
-            all_weight_changes.update(propagated_changes)
+        # Step 3: Calculate all affected components (ancestors and descendants)
+        self.logger.debug("Determining all affected components")
+        affected_components = self._get_all_affected_components(
+            modified_graph, list(decision.weight_changes.keys())
+        )
+        decision.affected_descendants.extend(affected_components)
         
-        # Update decision with propagated changes
+        # Step 4: Calculate comprehensive bidirectional changes
+        self.logger.debug("Computing bidirectional weight changes")
+        all_weight_changes = self._calculate_bidirectional_changes(
+            graph, modified_graph, decision.weight_changes, affected_components
+        )
+        
+        # Update decision with all propagated changes
         decision.propagated_weight_changes = all_weight_changes
         
         return modified_graph, all_weight_changes
     
+    def _get_all_affected_components(
+        self,
+        graph: 'PortfolioGraph', 
+        changed_components: List[str]
+    ) -> List[str]:
+        """Get all components affected by weight changes (ancestors + descendants)"""
+        affected = set(changed_components)
+        
+        # Get all ancestors (for leaf changes - bottom-up propagation)
+        for comp_id in changed_components:
+            ancestors = self._get_all_ancestors(graph, comp_id)
+            affected.update(ancestors)
+        
+        # Get all descendants (for node changes - top-down propagation)
+        for comp_id in changed_components:
+            descendants = self._get_affected_descendants(graph, comp_id, None)
+            affected.update(descendants)
+        
+        # Remove the original changed components to avoid duplication
+        affected_propagated = affected - set(changed_components)
+        return list(affected_propagated)
+    
     def _create_graph_copy(self, graph: 'PortfolioGraph') -> 'PortfolioGraph':
         """Create a deep copy of the portfolio graph for modification"""
-        # For now, return the same graph (in practice would create deep copy)
-        # This is a simplification - real implementation would need proper graph copying
-        return graph
+        # For decision attribution, we need to work with a copy to avoid modifying the original
+        # Since full graph deep copy is complex, we'll create a new graph with same structure
+        try:
+            from .builders import PortfolioBuilder
+            
+            # Create builder to rebuild the graph
+            builder = PortfolioBuilder(
+                auto_normalize_hierarchy=True,
+                root_id=graph.root_id
+            )
+            
+            # Extract all components and their relationships
+            components_info = {}
+            edges = []
+            
+            for comp_id, component in graph.components.items():
+                # Get all weight types
+                port_weight = self._get_component_weight(graph, comp_id, 'portfolio_weight')
+                bench_weight = self._get_component_weight(graph, comp_id, 'benchmark_weight')
+                port_orig = self._get_component_weight(graph, comp_id, 'portfolio_weight_original')
+                bench_orig = self._get_component_weight(graph, comp_id, 'benchmark_weight_original')
+                
+                components_info[comp_id] = {
+                    'id': comp_id,
+                    'name': getattr(component, 'name', comp_id),
+                    'type': 'leaf' if component.is_leaf() else 'node',
+                    'portfolio_weight': port_weight,
+                    'benchmark_weight': bench_weight,
+                    'is_overlay': getattr(component, 'is_overlay', False),
+                    'data': None,  # Add data field expected by builder
+                    'path_parts': comp_id.split('/')
+                }
+                
+                # Store original weights if they exist
+                if port_orig is not None and port_orig != 0.0:
+                    components_info[comp_id]['portfolio_weight_original'] = port_orig
+                if bench_orig is not None and bench_orig != 0.0:
+                    components_info[comp_id]['benchmark_weight_original'] = bench_orig
+                
+                # Build edges
+                if hasattr(component, 'parent_ids') and component.parent_ids:
+                    for parent_id in component.parent_ids:
+                        edges.append((parent_id, comp_id))
+            
+            # Set builder internal state
+            builder._components_info = components_info
+            builder._edges = edges
+            
+            # Build the copied graph  
+            copied_graph = builder.build()
+            return copied_graph
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to create graph copy: {e}, using original graph")
+            return graph
+    
+    def _trigger_hierarchy_renormalization(self, graph: 'PortfolioGraph') -> None:
+        """Trigger hierarchy re-normalization using PortfolioBuilder logic"""
+        try:
+            # Get all component info from the graph to rebuild internal structure
+            components_info = {}
+            edges = []
+            
+            # Extract component information from the graph
+            for comp_id, component in graph.components.items():
+                # Get weights
+                port_weight = self._get_component_weight(graph, comp_id, 'portfolio_weight')
+                bench_weight = self._get_component_weight(graph, comp_id, 'benchmark_weight')
+                
+                # Determine component type
+                comp_type = 'leaf' if component.is_leaf() else 'node'
+                
+                # Store component info
+                components_info[comp_id] = {
+                    'id': comp_id,
+                    'name': getattr(component, 'name', comp_id),
+                    'type': comp_type,
+                    'portfolio_weight': port_weight,
+                    'benchmark_weight': bench_weight,
+                    'is_overlay': getattr(component, 'is_overlay', False)
+                }
+                
+                # Build edges from parent relationships
+                if hasattr(component, 'parent_ids') and component.parent_ids:
+                    for parent_id in component.parent_ids:
+                        edges.append((parent_id, comp_id))
+            
+            # Create temporary PortfolioBuilder to apply auto-normalization
+            from .builders import PortfolioBuilder
+            builder = PortfolioBuilder(
+                auto_normalize_hierarchy=True,
+                root_id=graph.root_id
+            )
+            
+            # Set internal state to match current graph
+            builder._components_info = components_info
+            builder._edges = edges
+            
+            # Apply auto-normalization logic
+            builder._auto_normalize_weights()
+            
+            # Update the graph with normalized weights
+            for comp_id, info in builder._components_info.items():
+                if comp_id in graph.components:
+                    self._update_component_weights_from_info(graph, comp_id, info)
+                    
+        except Exception as e:
+            self.logger.warning(f"Failed to trigger hierarchy re-normalization: {e}")
+    
+    def _update_component_weights_from_info(self, graph: 'PortfolioGraph', comp_id: str, info: dict) -> None:
+        """Update component weights in graph from builder info"""
+        from .metrics import ScalarMetric
+        
+        # Update all weight types that may have been calculated
+        weight_fields = [
+            'portfolio_weight', 'benchmark_weight',
+            'portfolio_relative_weight', 'benchmark_relative_weight', 
+            'portfolio_operational_weight', 'benchmark_operational_weight'
+        ]
+        
+        for field in weight_fields:
+            if field in info and info[field] is not None:
+                graph.metric_store.set_metric(comp_id, field, ScalarMetric(info[field]))
+    
+    def _get_all_ancestors(self, graph: 'PortfolioGraph', component_id: str) -> List[str]:
+        """Get all ancestor components (for bottom-up propagation)"""
+        ancestors = []
+        visited = set()
+        
+        def collect_ancestors(comp_id: str):
+            if comp_id in visited:
+                return
+            visited.add(comp_id)
+            
+            if comp_id in graph.components:
+                component = graph.components[comp_id]
+                if hasattr(component, 'parent_ids') and component.parent_ids:
+                    for parent_id in component.parent_ids:
+                        ancestors.append(parent_id)
+                        collect_ancestors(parent_id)
+        
+        collect_ancestors(component_id)
+        return ancestors
     
     def _apply_weight_change_to_graph(
         self,
         graph: 'PortfolioGraph',
         weight_change: WeightChange
     ) -> None:
-        """Apply a weight change to the portfolio graph"""
+        """Apply a weight change to the portfolio graph with original weight preservation"""
         from .metrics import ScalarMetric
         
-        # Update portfolio weight
+        # Check if component was auto-normalized (has original weights)
+        was_auto_normalized = False
+        if hasattr(graph, 'was_auto_normalized'):
+            was_auto_normalized = graph.was_auto_normalized(weight_change.component_id)
+        
+        # If this is a direct change and component was auto-normalized, preserve original context
+        if weight_change.change_type == WeightChangeType.DIRECT and was_auto_normalized:
+            # Update original weights if they exist in the weight change
+            if weight_change.portfolio_weight_original_after is not None:
+                graph.metric_store.set_metric(
+                    weight_change.component_id,
+                    'portfolio_weight_original',
+                    ScalarMetric(weight_change.portfolio_weight_original_after)
+                )
+            
+            if weight_change.benchmark_weight_original_after is not None:
+                graph.metric_store.set_metric(
+                    weight_change.component_id,
+                    'benchmark_weight_original',
+                    ScalarMetric(weight_change.benchmark_weight_original_after)
+                )
+        
+        # Update normalized weights (always)
         graph.metric_store.set_metric(
             weight_change.component_id,
             'portfolio_weight',
             ScalarMetric(weight_change.portfolio_weight_after)
         )
         
-        # Update benchmark weight
         graph.metric_store.set_metric(
             weight_change.component_id,
             'benchmark_weight',
             ScalarMetric(weight_change.benchmark_weight_after)
         )
+        
+        # Handle overlay operational weights if present
+        if weight_change.portfolio_operational_weight_after is not None:
+            graph.metric_store.set_metric(
+                weight_change.component_id,
+                'portfolio_operational_weight',
+                ScalarMetric(weight_change.portfolio_operational_weight_after)
+            )
+        
+        if weight_change.benchmark_operational_weight_after is not None:
+            graph.metric_store.set_metric(
+                weight_change.component_id,
+                'benchmark_operational_weight',
+                ScalarMetric(weight_change.benchmark_operational_weight_after)
+            )
     
     def _get_affected_descendants(
         self,
@@ -669,6 +899,115 @@ class HierarchicalDecisionAnalyzer:
                 continue
         
         return propagated_changes
+    
+    def _calculate_bidirectional_changes(
+        self,
+        original_graph: 'PortfolioGraph',
+        modified_graph: 'PortfolioGraph', 
+        direct_changes: Dict[str, WeightChange],
+        affected_components: List[str]
+    ) -> Dict[str, WeightChange]:
+        """
+        Calculate bidirectional weight changes including direct changes and all propagation.
+        
+        Parameters
+        ----------
+        original_graph : PortfolioGraph
+            Original graph before changes
+        modified_graph : PortfolioGraph
+            Graph after changes and re-normalization
+        direct_changes : Dict[str, WeightChange]
+            Direct weight changes from decision
+        affected_components : List[str]
+            All components affected by propagation
+            
+        Returns
+        -------
+        Dict[str, WeightChange]
+            Complete set of weight changes with proper change type classification
+        """
+        all_changes = {}
+        
+        # Include direct changes
+        for comp_id, change in direct_changes.items():
+            all_changes[comp_id] = change
+        
+        # Calculate propagated changes for affected components
+        for comp_id in affected_components:
+            try:
+                # Get original weights
+                orig_port = self._get_component_weight(original_graph, comp_id, 'portfolio_weight')
+                orig_bench = self._get_component_weight(original_graph, comp_id, 'benchmark_weight')
+                orig_port_orig = self._get_component_weight(original_graph, comp_id, 'portfolio_weight_original')
+                orig_bench_orig = self._get_component_weight(original_graph, comp_id, 'benchmark_weight_original')
+                orig_port_op = self._get_component_weight(original_graph, comp_id, 'portfolio_operational_weight')
+                orig_bench_op = self._get_component_weight(original_graph, comp_id, 'benchmark_operational_weight')
+                
+                # Get modified weights
+                mod_port = self._get_component_weight(modified_graph, comp_id, 'portfolio_weight')
+                mod_bench = self._get_component_weight(modified_graph, comp_id, 'benchmark_weight')
+                mod_port_orig = self._get_component_weight(modified_graph, comp_id, 'portfolio_weight_original')
+                mod_bench_orig = self._get_component_weight(modified_graph, comp_id, 'benchmark_weight_original')
+                mod_port_op = self._get_component_weight(modified_graph, comp_id, 'portfolio_operational_weight')
+                mod_bench_op = self._get_component_weight(modified_graph, comp_id, 'benchmark_operational_weight')
+                
+                # Check if there's a meaningful change
+                if (abs(orig_port - mod_port) > 1e-10 or abs(orig_bench - mod_bench) > 1e-10):
+                    
+                    # Determine change type based on component relationships
+                    change_type = self._determine_change_type(
+                        original_graph, comp_id, direct_changes
+                    )
+                    
+                    # Create weight change with all weight types
+                    weight_change = WeightChange(
+                        component_id=comp_id,
+                        portfolio_weight_before=orig_port,
+                        portfolio_weight_after=mod_port,
+                        benchmark_weight_before=orig_bench,
+                        benchmark_weight_after=mod_bench,
+                        change_type=change_type,
+                        portfolio_weight_original_before=orig_port_orig,
+                        portfolio_weight_original_after=mod_port_orig,
+                        benchmark_weight_original_before=orig_bench_orig,
+                        benchmark_weight_original_after=mod_bench_orig,
+                        portfolio_operational_weight_before=orig_port_op,
+                        portfolio_operational_weight_after=mod_port_op,
+                        benchmark_operational_weight_before=orig_bench_op,
+                        benchmark_operational_weight_after=mod_bench_op
+                    )
+                    
+                    all_changes[comp_id] = weight_change
+                    
+            except Exception as e:
+                self.logger.warning(f"Could not calculate bidirectional change for {comp_id}: {e}")
+                continue
+        
+        return all_changes
+    
+    def _determine_change_type(
+        self,
+        graph: 'PortfolioGraph',
+        component_id: str,
+        direct_changes: Dict[str, WeightChange]
+    ) -> WeightChangeType:
+        """Determine the type of weight change based on component relationships"""
+        
+        # Check if any direct changes are descendants (bottom-up propagation)
+        for direct_comp_id in direct_changes.keys():
+            # Get all ancestors of the directly changed component
+            direct_comp_ancestors = self._get_all_ancestors(graph, direct_comp_id)
+            if component_id in direct_comp_ancestors:
+                return WeightChangeType.PROPAGATED_UP
+        
+        # Check if any direct changes are ancestors (top-down propagation)  
+        component_ancestors = self._get_all_ancestors(graph, component_id)
+        for direct_comp_id in direct_changes.keys():
+            if direct_comp_id in component_ancestors:
+                return WeightChangeType.PROPAGATED_DOWN
+        
+        # If neither ancestor nor descendant, it's due to normalization
+        return WeightChangeType.NORMALIZATION
     
     def _get_component_weight(
         self,
