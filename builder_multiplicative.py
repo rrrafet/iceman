@@ -37,6 +37,7 @@ class PortfolioBuilderMultiplicative:
                  *,
                  allow_shorts: bool = False,
                  normalize_to_relative: bool = True,
+                 weight_reconcile_policy: Literal['respect_children', 'respect_parent'] = 'respect_children',
                  delimiter: str = "/",
                  root_id: str = 'portfolio',
                  metric_store: Optional['MetricStore'] = None):
@@ -51,6 +52,10 @@ class PortfolioBuilderMultiplicative:
             Whether to convert absolute weights to relative weights.
             When True, children become relative shares of their immediate parent.
             When False, weights are stored as provided (absolute).
+        weight_reconcile_policy : {'respect_children', 'respect_parent'}, default 'respect_children'
+            Policy for handling conflicts between node weights and children weights:
+            - 'respect_children': Node weight = sum of children (children are authoritative)
+            - 'respect_parent': Children scaled proportionally to fit node weight (node is authoritative)
         delimiter : str, default "/"
             Path delimiter character for hierarchical paths
         root_id : str, default 'portfolio'
@@ -61,6 +66,7 @@ class PortfolioBuilderMultiplicative:
         # Configuration
         self.allow_shorts = allow_shorts
         self.normalize_to_relative = normalize_to_relative
+        self.weight_reconcile_policy = weight_reconcile_policy
         self.delimiter = delimiter
         self.root_id = root_id
         self.metric_store = metric_store or InMemoryMetricStore()
@@ -424,13 +430,13 @@ class PortfolioBuilderMultiplicative:
             self._components_info[primary_root]['benchmark_weight'] = 1.0
     
     def _convert_children_to_relative(self, parent_id: str, original_weights: dict) -> None:
-        """Convert children to relative weights - normalize only among explicitly added children."""
+        """Convert children to relative weights using the specified reconciliation policy."""
         children = self._get_direct_children(parent_id)
         if not children:
             return
         
         for weight_side in ['portfolio_weight', 'benchmark_weight']:
-            # Calculate sum of explicitly added children for this parent
+            # Collect valid children and their weights
             children_sum = 0.0
             valid_children = []
             
@@ -446,8 +452,35 @@ class PortfolioBuilderMultiplicative:
                     children_sum += child_absolute
                     valid_children.append((child_id, child_absolute))
             
-            # Convert each child to relative weight as share of children_sum
-            if children_sum != 0 and valid_children:
+            if children_sum == 0 or not valid_children:
+                continue
+                
+            # Apply reconciliation policy
+            if self.weight_reconcile_policy == 'respect_parent':
+                # Scale children proportionally to fit parent weight, then convert to relative
+                original_parent = original_weights.get(parent_id, {})
+                target_parent_weight = original_parent.get(weight_side)
+                
+                if target_parent_weight is not None and target_parent_weight != 0:
+                    # Calculate scaling factor to fit parent weight
+                    scale_factor = target_parent_weight / children_sum
+                    
+                    # Scale each child and convert to relative share of target parent
+                    for child_id, child_absolute in valid_children:
+                        scaled_child_weight = child_absolute * scale_factor
+                        child_relative = scaled_child_weight / target_parent_weight
+                        self._components_info[child_id][weight_side] = child_relative
+                    
+                    # Update parent's absolute weight to the target (for next level normalization)
+                    self._components_info[parent_id][weight_side] = target_parent_weight
+                    
+                else:
+                    # No parent weight specified, fallback to respect_children behavior
+                    for child_id, child_absolute in valid_children:
+                        child_relative = child_absolute / children_sum
+                        self._components_info[child_id][weight_side] = child_relative
+            else:
+                # 'respect_children': normalize children among themselves (current behavior)
                 for child_id, child_absolute in valid_children:
                     child_relative = child_absolute / children_sum
                     self._components_info[child_id][weight_side] = child_relative
