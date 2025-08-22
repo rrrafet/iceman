@@ -162,7 +162,7 @@ class PortfolioBuilderMultiplicative:
         # If no explicit parent found, connect to root if this isn't the root
         if full_path != self.root_id:
             potential_edges = [(p, c) for p, c in self._edges if c == full_path]
-            if not potential_edges and self.root_id in self._components_info:
+            if not potential_edges:
                 edge = (self.root_id, full_path)
                 if edge not in self._edges:
                     self._edges.append(edge)
@@ -178,6 +178,74 @@ class PortfolioBuilderMultiplicative:
         """
         self._components_info.clear()
         self._edges.clear()
+        return self
+    
+    def add_data(self, 
+                 path: str, 
+                 data: Dict[str, Any], 
+                 create_if_missing: bool = False) -> 'PortfolioBuilderMultiplicative':
+        """
+        Add or update data for a component in the portfolio hierarchy.
+        
+        This helper function allows you to assign additional data to components
+        that have already been added to the builder, or optionally create new
+        components with data.
+        
+        Parameters
+        ----------
+        path : str
+            Hierarchical path of the component (e.g., "equity/us/tech/AAPL")
+        data : dict
+            Dictionary of data to assign/merge with the component.
+            New keys are added, existing keys are updated.
+        create_if_missing : bool, default False
+            If True, creates the component if it doesn't exist using add_path()
+            If False, raises ValueError if component doesn't exist
+            
+        Returns
+        -------
+        PortfolioBuilderMultiplicative
+            Self for method chaining
+            
+        Raises
+        ------
+        ValueError
+            If path doesn't exist and create_if_missing=False
+            
+        Examples
+        --------
+        >>> builder = PortfolioBuilderMultiplicative()
+        >>> builder.add_path("equity/us/tech/AAPL", portfolio_weight=0.05)
+        >>> builder.add_data("equity/us/tech/AAPL", {
+        ...     "sector": "Technology",
+        ...     "market_cap": 3000000000,
+        ...     "returns": [0.01, 0.02, -0.01, 0.03]
+        ... })
+        >>> 
+        >>> # Chain multiple data additions
+        >>> builder.add_data("equity/us/tech/AAPL", {"pe_ratio": 28.5}) \\
+        ...        .add_data("equity/us/tech/MSFT", {"pe_ratio": 30.2})
+        """
+        # Validate that data is provided
+        if not isinstance(data, dict) or not data:
+            raise ValueError("Data must be a non-empty dictionary")
+        
+        # Check if component exists
+        if path not in self._components_info:
+            if create_if_missing:
+                # Create the component with minimal parameters
+                self.add_path(path=path, component_type='auto')
+            else:
+                raise ValueError(f"Component '{path}' not found. Use create_if_missing=True to create it.")
+        
+        # Get existing component info
+        comp_info = self._components_info[path]
+        
+        # Merge data with existing data (new keys added, existing keys updated)
+        if comp_info['data'] is None:
+            comp_info['data'] = {}
+        comp_info['data'].update(data)
+        
         return self
         
     def from_paths(self, rows: List[Dict[str, Any]]) -> 'PortfolioBuilderMultiplicative':
@@ -286,11 +354,15 @@ class PortfolioBuilderMultiplicative:
         # Simple 4-step process
         self._validate_essentials()
         
-        # Step 1: Proportional renormalization if enabled
+        # Step 1: Ensure root unity FIRST (before any renormalization)
+        if self.proportional_renormalize or self.normalize_to_relative:
+            self._ensure_root_unity()
+        
+        # Step 2: Proportional renormalization if enabled
         if self.proportional_renormalize:
             self._proportional_renormalize()
         
-        # Step 2: Convert to relative weights if enabled
+        # Step 3: Convert to relative weights if enabled
         if self.normalize_to_relative:
             self._convert_to_relative_weights()
             
@@ -324,10 +396,7 @@ class PortfolioBuilderMultiplicative:
                 'benchmark_weight': comp_info.get('benchmark_weight')
             }
         
-        # Step 1: Ensure root weight = 1.0 for multiplicative consistency
-        self._ensure_root_unity()
-        
-        # Step 2: Top-down conversion using original absolute weights
+        # Step 1: Top-down conversion using original absolute weights
         topo_order = self._get_topological_order()
         for component_id in topo_order:  # Start from root
             self._convert_children_to_relative(component_id, original_weights)
