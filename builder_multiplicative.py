@@ -37,6 +37,7 @@ class PortfolioBuilderMultiplicative:
                  *,
                  allow_shorts: bool = False,
                  normalize_to_relative: bool = True,
+                 proportional_renormalize: bool = False,
                  weight_reconcile_policy: Literal['respect_children', 'respect_parent'] = 'respect_children',
                  delimiter: str = "/",
                  root_id: str = 'portfolio',
@@ -52,6 +53,11 @@ class PortfolioBuilderMultiplicative:
             Whether to convert absolute weights to relative weights.
             When True, children become relative shares of their immediate parent.
             When False, weights are stored as provided (absolute).
+        proportional_renormalize : bool, default False
+            Whether to proportionally renormalize weights before processing.
+            When True, leaf weights are normalized (weights / sum(weights)) and
+            node weights are calculated by aggregating normalized child weights.
+            Overlay components preserve their original weights.
         weight_reconcile_policy : {'respect_children', 'respect_parent'}, default 'respect_children'
             Policy for handling conflicts between node weights and children weights:
             - 'respect_children': Node weight = sum of children (children are authoritative)
@@ -66,6 +72,7 @@ class PortfolioBuilderMultiplicative:
         # Configuration
         self.allow_shorts = allow_shorts
         self.normalize_to_relative = normalize_to_relative
+        self.proportional_renormalize = proportional_renormalize
         self.weight_reconcile_policy = weight_reconcile_policy
         self.delimiter = delimiter
         self.root_id = root_id
@@ -276,9 +283,14 @@ class PortfolioBuilderMultiplicative:
                 'data': {}
             }
             
-        # Simple 3-step process
+        # Simple 4-step process
         self._validate_essentials()
         
+        # Step 1: Proportional renormalization if enabled
+        if self.proportional_renormalize:
+            self._proportional_renormalize()
+        
+        # Step 2: Convert to relative weights if enabled
         if self.normalize_to_relative:
             self._convert_to_relative_weights()
             
@@ -487,6 +499,92 @@ class PortfolioBuilderMultiplicative:
                     
             # Overlays keep their absolute weights for operational tracking
     
+    def _proportional_renormalize(self) -> None:
+        """
+        Proportionally renormalize weights: normalize leaf weights and propagate up hierarchy.
+        
+        Process:
+        1. Identify leaf components (no children)
+        2. Normalize non-overlay leaf weights: weights / sum(weights) 
+        3. Propagate weights bottom-up to calculate node weights
+        4. Overlay components preserve their original weights
+        """
+        # Step 1: Identify leaf components
+        leaf_components = []
+        for comp_id in self._components_info:
+            if self._is_leaf_component(comp_id):
+                leaf_components.append(comp_id)
+        
+        # Step 2: Normalize leaf weights for each weight type
+        for weight_side in ['portfolio_weight', 'benchmark_weight']:
+            self._normalize_leaf_weights(leaf_components, weight_side)
+            
+        # Step 3: Propagate weights bottom-up through hierarchy
+        self._propagate_weights_bottom_up()
+    
+    def _normalize_leaf_weights(self, leaf_components: List[str], weight_side: str) -> None:
+        """Normalize leaf weights proportionally, excluding overlays."""
+        # Collect non-overlay leaf weights
+        leaf_weights = []
+        non_overlay_leaves = []
+        
+        for comp_id in leaf_components:
+            comp_info = self._components_info[comp_id]
+            weight = comp_info.get(weight_side)
+            is_overlay = comp_info.get('is_overlay', False)
+            
+            if weight is not None and not is_overlay:
+                leaf_weights.append(weight)
+                non_overlay_leaves.append(comp_id)
+        
+        if not leaf_weights or sum(leaf_weights) == 0:
+            return  # No weights to normalize
+            
+        # Calculate normalized weights: weights / sum(weights)
+        total_weight = sum(leaf_weights)
+        
+        for i, comp_id in enumerate(non_overlay_leaves):
+            normalized_weight = leaf_weights[i] / total_weight
+            self._components_info[comp_id][weight_side] = normalized_weight
+    
+    def _propagate_weights_bottom_up(self) -> None:
+        """Propagate weights from leaves up to root using bottom-up traversal."""
+        # Get reverse topological order (bottom-up)
+        topo_order = self._get_topological_order()
+        reverse_topo = list(reversed(topo_order))
+        
+        for weight_side in ['portfolio_weight', 'benchmark_weight']:
+            for comp_id in reverse_topo:
+                if not self._is_leaf_component(comp_id):
+                    # This is a node - calculate weight from children
+                    self._calculate_node_weight_from_children(comp_id, weight_side)
+    
+    def _calculate_node_weight_from_children(self, node_id: str, weight_side: str) -> None:
+        """Calculate node weight as sum of non-overlay children weights."""
+        children = self._get_direct_children(node_id)
+        if not children:
+            return
+            
+        total_weight = 0.0
+        has_children_with_weights = False
+        
+        for child_id in children:
+            if child_id not in self._components_info:
+                continue
+                
+            child_info = self._components_info[child_id]
+            child_weight = child_info.get(weight_side)
+            is_overlay = child_info.get('is_overlay', False)
+            
+            # Sum non-overlay children weights
+            if child_weight is not None and not is_overlay:
+                total_weight += child_weight
+                has_children_with_weights = True
+        
+        # Set the calculated weight for the node
+        if has_children_with_weights:
+            self._components_info[node_id][weight_side] = total_weight
+
     def _store_data_as_metrics(self, graph: 'PortfolioGraph', component_id: str, data: dict) -> None:
         """Store data dict entries as metrics in the metric store."""
         if not data:
