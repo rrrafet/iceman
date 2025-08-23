@@ -162,20 +162,39 @@ class RiskSchemaFactory:
         RiskResultSchema
             Unified schema
         """
-        # Extract data from visitor for specified component
+        # Extract asset names from visitor or context
+        asset_names = []
+        factor_names = getattr(visitor, 'factor_names', [])
+        
+        # Try to get asset names from visitor first
+        if hasattr(visitor, 'descendant_leaves') and visitor.descendant_leaves:
+            # Convert full paths to component names (e.g., "TOTAL/EQLIKE/EQ/EQDM/EQDMLC" -> "EQDMLC")
+            asset_names = [name.split('/')[-1] for name in visitor.descendant_leaves]
+        
+        # Create schema with proper asset names
         schema = RiskResultSchema(
             analysis_type=analysis_type,
-            asset_names=getattr(visitor, 'descendant_leaves', []),
-            factor_names=getattr(visitor, 'factor_names', [])
+            asset_names=asset_names,
+            factor_names=factor_names
         )
         
         # Try to extract risk decomposition context for the component
         try:
             if hasattr(visitor, 'metric_store'):
-                from .metrics import ObjectMetric
                 context_metric = visitor.metric_store.get_metric(component_id, 'hierarchical_model_context')
-                if isinstance(context_metric, ObjectMetric):
+                if context_metric and hasattr(context_metric, 'value'):
                     hierarchical_context = context_metric.value()
+                    
+                    # Try to get better asset names from the context
+                    if hasattr(hierarchical_context, 'portfolio_decomposer'):
+                        decomposer = hierarchical_context.portfolio_decomposer
+                        if hasattr(decomposer, 'context') and hasattr(decomposer.context, 'get_asset_names'):
+                            context_asset_names = decomposer.context.get_asset_names()
+                            if context_asset_names:
+                                # Convert full paths to component names if needed
+                                asset_names = [name.split('/')[-1] for name in context_asset_names]
+                                # Update schema with better asset names
+                                schema.asset_names = asset_names
                     
                     # Extract core metrics from portfolio decomposer
                     if hasattr(hierarchical_context, 'portfolio_decomposer'):
@@ -191,33 +210,34 @@ class RiskSchemaFactory:
                         schema.set_factor_contributions(decomposer.factor_contributions)
                         schema.set_factor_exposures(decomposer.portfolio_factor_exposure)
                         
-                        # Set weights from decomposer results
-                        if 'portfolio_weights' in decomposer._results:
-                            schema.set_portfolio_weights(decomposer._results['portfolio_weights'])
-                        if 'benchmark_weights' in decomposer._results:
-                            schema.set_benchmark_weights(decomposer._results['benchmark_weights'])
-                        if 'active_weights' in decomposer._results:
-                            schema.set_active_weights(decomposer._results['active_weights'], auto_calculate=False)
-                        
                         # Set validation results
                         validation_results = decomposer.validate_contributions()
                         schema.set_validation_results(validation_results)
                         
-                        # Add additional weights from other decomposers if available
+                        # Extract weights from the correct decomposers
+                        # Portfolio weights from portfolio_decomposer
+                        if 'portfolio_weights' in decomposer._results:
+                            schema.set_portfolio_weights(decomposer._results['portfolio_weights'])
+                        
+                        # Benchmark weights from benchmark_decomposer (stored in portfolio_weights key)
                         if hasattr(hierarchical_context, 'benchmark_decomposer'):
                             benchmark_decomposer = hierarchical_context.benchmark_decomposer
-                            if 'benchmark_weights' in benchmark_decomposer._results:
-                                # Only set if not already set from portfolio decomposer
-                                if not schema.data["weights"]["benchmark_weights"]:
-                                    schema.set_benchmark_weights(benchmark_decomposer._results['benchmark_weights'])
+                            if 'portfolio_weights' in benchmark_decomposer._results:
+                                schema.set_benchmark_weights(benchmark_decomposer._results['portfolio_weights'])
                         
-                        # Add active risk if available
+                        # Active weights from active_decomposer (calculate as portfolio - benchmark)
                         if hasattr(hierarchical_context, 'active_decomposer'):
                             active_decomposer = hierarchical_context.active_decomposer
-                            
-                            # Set active weights if not already set
-                            if not schema.data["weights"]["active_weights"] and 'active_weights' in active_decomposer._results:
-                                schema.set_active_weights(active_decomposer._results['active_weights'], auto_calculate=False)
+                            # Check if active decomposer has both portfolio and benchmark weights
+                            if ('portfolio_weights' in active_decomposer._results and 
+                                'benchmark_weights' in active_decomposer._results):
+                                active_portfolio = active_decomposer._results['portfolio_weights']
+                                active_benchmark = active_decomposer._results['benchmark_weights']
+                                active_weights = active_portfolio - active_benchmark
+                                schema.set_active_weights(active_weights, auto_calculate=False)
+                            elif 'portfolio_weights' in active_decomposer._results:
+                                # Fallback: use portfolio_weights directly if benchmark not available
+                                schema.set_active_weights(active_decomposer._results['portfolio_weights'], auto_calculate=False)
                             
                             active_metrics = {
                                 'total_active_risk': active_decomposer.portfolio_volatility,
