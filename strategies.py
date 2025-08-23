@@ -88,6 +88,9 @@ class PortfolioAnalysisStrategy(RiskAnalysisStrategy):
             annualized=annualize
         )
         
+        # Set portfolio weights
+        schema.set_portfolio_weights(weights)
+        
         # Core risk calculations (all raw, non-annualized)
         portfolio_volatility = RiskCalculator.calculate_portfolio_volatility(
             model.covar, weights
@@ -512,6 +515,11 @@ class ActiveRiskAnalysisStrategy(RiskAnalysisStrategy):
             data_frequency=frequency,
             annualized=annualize
         )
+        
+        # Set weights
+        schema.set_portfolio_weights(portfolio_weights)
+        schema.set_benchmark_weights(benchmark_weights)
+        schema.set_active_weights(active_weights, auto_calculate=False)
         
         # Set core metrics (apply annualization if requested)
         if annualize:

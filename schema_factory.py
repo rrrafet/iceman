@@ -191,13 +191,34 @@ class RiskSchemaFactory:
                         schema.set_factor_contributions(decomposer.factor_contributions)
                         schema.set_factor_exposures(decomposer.portfolio_factor_exposure)
                         
+                        # Set weights from decomposer results
+                        if 'portfolio_weights' in decomposer._results:
+                            schema.set_portfolio_weights(decomposer._results['portfolio_weights'])
+                        if 'benchmark_weights' in decomposer._results:
+                            schema.set_benchmark_weights(decomposer._results['benchmark_weights'])
+                        if 'active_weights' in decomposer._results:
+                            schema.set_active_weights(decomposer._results['active_weights'], auto_calculate=False)
+                        
                         # Set validation results
                         validation_results = decomposer.validate_contributions()
                         schema.set_validation_results(validation_results)
                         
+                        # Add additional weights from other decomposers if available
+                        if hasattr(hierarchical_context, 'benchmark_decomposer'):
+                            benchmark_decomposer = hierarchical_context.benchmark_decomposer
+                            if 'benchmark_weights' in benchmark_decomposer._results:
+                                # Only set if not already set from portfolio decomposer
+                                if not schema.data["weights"]["benchmark_weights"]:
+                                    schema.set_benchmark_weights(benchmark_decomposer._results['benchmark_weights'])
+                        
                         # Add active risk if available
                         if hasattr(hierarchical_context, 'active_decomposer'):
                             active_decomposer = hierarchical_context.active_decomposer
+                            
+                            # Set active weights if not already set
+                            if not schema.data["weights"]["active_weights"] and 'active_weights' in active_decomposer._results:
+                                schema.set_active_weights(active_decomposer._results['active_weights'], auto_calculate=False)
+                            
                             active_metrics = {
                                 'total_active_risk': active_decomposer.portfolio_volatility,
                                 'active_factor_risk': active_decomposer.factor_risk_contribution,

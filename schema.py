@@ -115,8 +115,17 @@ class RiskResultSchema:
                 "by_factor": {},            # Named factor contributions: {factor_name: contribution}
                 "by_component": {}          # For hierarchical: {component_id: contribution}
             },
+            "weights": {
+                "portfolio_weights": {},      # Named portfolio weights: {asset_name: weight}
+                "benchmark_weights": {},      # Named benchmark weights: {asset_name: weight}
+                "active_weights": {}          # Named active weights: {asset_name: weight}
+            },
             "arrays": {
-                "weights": {},
+                "weights": {
+                    "portfolio_weights": [],  # Array format for backward compatibility
+                    "benchmark_weights": [],  # Array format for backward compatibility
+                    "active_weights": []      # Array format for backward compatibility
+                },
                 "exposures": {},
                 "contributions": {}
             },
@@ -282,6 +291,115 @@ class RiskResultSchema:
         
         # Store raw array for backward compatibility
         self._data["arrays"]["contributions"]["factor_contributions"] = list(contributions) if not isinstance(contributions, dict) else list(contributions.values())
+    
+    def set_portfolio_weights(self, weights: Union[np.ndarray, Dict[str, float], List[float]]) -> None:
+        """
+        Set portfolio weights with automatic name mapping.
+        
+        Parameters
+        ----------
+        weights : array-like or dict
+            Portfolio weights, either as array/list or pre-named dictionary
+        """
+        if isinstance(weights, dict):
+            self._data["weights"]["portfolio_weights"] = weights.copy()
+        else:
+            weights_array = np.asarray(weights)
+            if len(self.asset_names) == len(weights_array):
+                self._data["weights"]["portfolio_weights"] = {
+                    name: float(value) for name, value in zip(self.asset_names, weights_array)
+                }
+            else:
+                # Fallback with generic names
+                self._data["weights"]["portfolio_weights"] = {
+                    f"asset_{i}": float(value) for i, value in enumerate(weights_array)
+                }
+        
+        # Store raw array for backward compatibility
+        if "weights" not in self._data["arrays"]:
+            self._data["arrays"]["weights"] = {}
+        self._data["arrays"]["weights"]["portfolio_weights"] = list(weights) if not isinstance(weights, dict) else list(weights.values())
+    
+    def set_benchmark_weights(self, weights: Union[np.ndarray, Dict[str, float], List[float]]) -> None:
+        """
+        Set benchmark weights with automatic name mapping.
+        
+        Parameters
+        ----------
+        weights : array-like or dict
+            Benchmark weights, either as array/list or pre-named dictionary
+        """
+        if isinstance(weights, dict):
+            self._data["weights"]["benchmark_weights"] = weights.copy()
+        else:
+            weights_array = np.asarray(weights)
+            if len(self.asset_names) == len(weights_array):
+                self._data["weights"]["benchmark_weights"] = {
+                    name: float(value) for name, value in zip(self.asset_names, weights_array)
+                }
+            else:
+                # Fallback with generic names
+                self._data["weights"]["benchmark_weights"] = {
+                    f"asset_{i}": float(value) for i, value in enumerate(weights_array)
+                }
+        
+        # Store raw array for backward compatibility
+        self._data["arrays"]["weights"]["benchmark_weights"] = list(weights) if not isinstance(weights, dict) else list(weights.values())
+    
+    def set_active_weights(self, weights: Optional[Union[np.ndarray, Dict[str, float], List[float]]] = None, 
+                          auto_calculate: bool = True) -> None:
+        """
+        Set active weights with automatic name mapping.
+        
+        Parameters
+        ----------
+        weights : array-like or dict, optional
+            Active weights, either as array/list or pre-named dictionary.
+            If None and auto_calculate=True, will calculate from portfolio - benchmark
+        auto_calculate : bool, default True
+            If True and weights is None, automatically calculate active weights
+            from portfolio_weights - benchmark_weights
+        """
+        if weights is None and auto_calculate:
+            # Try to calculate active weights from existing portfolio and benchmark weights
+            portfolio_weights = self._data["weights"]["portfolio_weights"]
+            benchmark_weights = self._data["weights"]["benchmark_weights"]
+            
+            if portfolio_weights and benchmark_weights:
+                # Calculate active weights from named dictionaries
+                all_assets = set(portfolio_weights.keys()) | set(benchmark_weights.keys())
+                active_weights_dict = {}
+                for asset in all_assets:
+                    port_weight = portfolio_weights.get(asset, 0.0)
+                    bench_weight = benchmark_weights.get(asset, 0.0)
+                    active_weights_dict[asset] = port_weight - bench_weight
+                
+                self._data["weights"]["active_weights"] = active_weights_dict
+                self._data["arrays"]["weights"]["active_weights"] = list(active_weights_dict.values())
+                return
+            else:
+                raise ValueError("Cannot auto-calculate active weights: portfolio or benchmark weights not set")
+        
+        if weights is None:
+            raise ValueError("weights parameter cannot be None when auto_calculate=False")
+        
+        # Set weights explicitly
+        if isinstance(weights, dict):
+            self._data["weights"]["active_weights"] = weights.copy()
+        else:
+            weights_array = np.asarray(weights)
+            if len(self.asset_names) == len(weights_array):
+                self._data["weights"]["active_weights"] = {
+                    name: float(value) for name, value in zip(self.asset_names, weights_array)
+                }
+            else:
+                # Fallback with generic names
+                self._data["weights"]["active_weights"] = {
+                    f"asset_{i}": float(value) for i, value in enumerate(weights_array)
+                }
+        
+        # Store raw array for backward compatibility
+        self._data["arrays"]["weights"]["active_weights"] = list(weights) if not isinstance(weights, dict) else list(weights.values())
     
     def set_factor_risk_contributions_matrix(self, matrix: Union[np.ndarray, Dict[str, Dict[str, float]]]) -> None:
         """
@@ -457,6 +575,85 @@ class RiskResultSchema:
                 "message": "No factor risk contributions matrix to validate"
             }
         
+        # Weight validation
+        weights_data = self._data["weights"]
+        portfolio_weights = weights_data["portfolio_weights"]
+        benchmark_weights = weights_data["benchmark_weights"]
+        active_weights = weights_data["active_weights"]
+        
+        # Portfolio weight validation
+        if portfolio_weights:
+            port_sum = sum(portfolio_weights.values())
+            port_finite = all(np.isfinite(w) for w in portfolio_weights.values())
+            validation_results["portfolio_weights"] = {
+                "passes": abs(port_sum - 1.0) < 1e-6 and port_finite,
+                "sum": port_sum,
+                "finite": port_finite,
+                "message": f"Portfolio weights sum: {port_sum:.6f}, finite: {port_finite}"
+            }
+        else:
+            validation_results["portfolio_weights"] = {
+                "passes": True,
+                "message": "No portfolio weights to validate"
+            }
+        
+        # Benchmark weight validation
+        if benchmark_weights:
+            bench_sum = sum(benchmark_weights.values())
+            bench_finite = all(np.isfinite(w) for w in benchmark_weights.values())
+            validation_results["benchmark_weights"] = {
+                "passes": abs(bench_sum - 1.0) < 1e-6 and bench_finite,
+                "sum": bench_sum,
+                "finite": bench_finite,
+                "message": f"Benchmark weights sum: {bench_sum:.6f}, finite: {bench_finite}"
+            }
+        else:
+            validation_results["benchmark_weights"] = {
+                "passes": True,
+                "message": "No benchmark weights to validate"
+            }
+        
+        # Active weight validation
+        if active_weights:
+            active_sum = sum(active_weights.values())
+            active_finite = all(np.isfinite(w) for w in active_weights.values())
+            # Active weights should sum to zero (approximately)
+            validation_results["active_weights"] = {
+                "passes": abs(active_sum) < 1e-6 and active_finite,
+                "sum": active_sum,
+                "finite": active_finite,
+                "message": f"Active weights sum: {active_sum:.6f}, finite: {active_finite}"
+            }
+        else:
+            validation_results["active_weights"] = {
+                "passes": True,
+                "message": "No active weights to validate"
+            }
+        
+        # Active weights calculation consistency
+        if portfolio_weights and benchmark_weights and active_weights:
+            # Check if active weights are consistent with portfolio - benchmark
+            all_assets = set(portfolio_weights.keys()) | set(benchmark_weights.keys()) | set(active_weights.keys())
+            max_difference = 0.0
+            for asset in all_assets:
+                port_weight = portfolio_weights.get(asset, 0.0)
+                bench_weight = benchmark_weights.get(asset, 0.0)
+                active_weight = active_weights.get(asset, 0.0)
+                expected_active = port_weight - bench_weight
+                difference = abs(active_weight - expected_active)
+                max_difference = max(max_difference, difference)
+            
+            validation_results["active_weights_consistency"] = {
+                "passes": max_difference < 1e-6,
+                "max_difference": max_difference,
+                "message": f"Active weights consistency check: max difference {max_difference:.8f}"
+            }
+        else:
+            validation_results["active_weights_consistency"] = {
+                "passes": True,
+                "message": "Insufficient weight data for consistency check"
+            }
+        
         # Overall validation
         all_passed = all(result.get("passes", False) for result in validation_results.values())
         validation_results["overall"] = {
@@ -531,6 +728,7 @@ class RiskResultSchema:
                 },
                 "asset_factor_loadings": self._data["exposures"]["factor_loadings"]
             },
+            "weights": self._data["weights"].copy(),
             "arrays": self._data["arrays"].copy(),
             "active_risk": self._data["active_risk"].copy(),
             "validation": self._data["validation"].copy(),
@@ -562,6 +760,18 @@ class RiskResultSchema:
             if isinstance(portfolio_factor_exposure, list) and portfolio_factor_exposure:
                 portfolio_factor_exposure = np.array(portfolio_factor_exposure)
         
+        # Convert weights to arrays for legacy compatibility
+        portfolio_weights = arrays["weights"].get("portfolio_weights", [])
+        benchmark_weights = arrays["weights"].get("benchmark_weights", [])
+        active_weights = arrays["weights"].get("active_weights", [])
+        
+        if isinstance(portfolio_weights, list) and portfolio_weights:
+            portfolio_weights = np.array(portfolio_weights)
+        if isinstance(benchmark_weights, list) and benchmark_weights:
+            benchmark_weights = np.array(benchmark_weights)
+        if isinstance(active_weights, list) and active_weights:
+            active_weights = np.array(active_weights)
+        
         return {
             "portfolio_volatility": core["total_risk"],
             "factor_risk_contribution": core["factor_risk_contribution"],
@@ -569,6 +779,9 @@ class RiskResultSchema:
             "factor_contributions": factor_contributions,
             "asset_total_contributions": asset_contributions,
             "portfolio_factor_exposure": portfolio_factor_exposure,
+            "portfolio_weights": portfolio_weights,
+            "benchmark_weights": benchmark_weights,
+            "active_weights": active_weights,
             "analysis_type": self._data["metadata"]["analysis_type"],
             "asset_names": self._data["identifiers"]["asset_names"],
             "factor_names": self._data["identifiers"]["factor_names"],
@@ -589,7 +802,10 @@ class RiskResultSchema:
             "specific_risk_percentage": core["specific_risk_percentage"],
             "number_of_components": len(identifiers.get("component_ids", [])),
             "factor_names": identifiers["factor_names"],
-            "component_names": identifiers.get("component_ids", identifiers["asset_names"])
+            "component_names": identifiers.get("component_ids", identifiers["asset_names"]),
+            "portfolio_weights": self._data["weights"]["portfolio_weights"],
+            "benchmark_weights": self._data["weights"]["benchmark_weights"],
+            "active_weights": self._data["weights"]["active_weights"]
         }
     
     @classmethod
@@ -650,6 +866,16 @@ class RiskResultSchema:
         if "active_risk" in decomposer_dict:
             schema.set_active_risk_metrics(decomposer_dict["active_risk"])
         
+        # Set weights if available
+        if "weights" in decomposer_dict:
+            weights_data = decomposer_dict["weights"]
+            if "portfolio_weights" in weights_data:
+                schema.set_portfolio_weights(weights_data["portfolio_weights"])
+            if "benchmark_weights" in weights_data:
+                schema.set_benchmark_weights(weights_data["benchmark_weights"])
+            if "active_weights" in weights_data:
+                schema.set_active_weights(weights_data["active_weights"], auto_calculate=False)
+        
         return schema
     
     @classmethod
@@ -692,6 +918,14 @@ class RiskResultSchema:
         # Set exposures
         if "portfolio_factor_exposure" in strategy_dict:
             schema.set_factor_exposures(strategy_dict["portfolio_factor_exposure"])
+        
+        # Set weights
+        if "portfolio_weights" in strategy_dict:
+            schema.set_portfolio_weights(strategy_dict["portfolio_weights"])
+        if "benchmark_weights" in strategy_dict:
+            schema.set_benchmark_weights(strategy_dict["benchmark_weights"])
+        if "active_weights" in strategy_dict:
+            schema.set_active_weights(strategy_dict["active_weights"], auto_calculate=False)
         
         # Set validation
         if "validation" in strategy_dict:
