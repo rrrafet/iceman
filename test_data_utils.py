@@ -112,8 +112,8 @@ def generate_toy_returns(component_ids: List[str],
         )
         
         results[component_id] = {
-            'portfolio_returns': portfolio_series,
-            'benchmark_returns': benchmark_series
+            'portfolio_return': portfolio_series,
+            'benchmark_return': benchmark_series
         }
     
     return results
@@ -380,10 +380,10 @@ def build_test_portfolio(component_ids: List[str],
         # Get returns data for this component
         comp_returns = returns_data.get(component_id, {})
         data_dict = {}
-        if 'portfolio_returns' in comp_returns:
-            data_dict['portfolio_returns'] = comp_returns['portfolio_returns']
-        if 'benchmark_returns' in comp_returns:
-            data_dict['benchmark_returns'] = comp_returns['benchmark_returns']
+        if 'portfolio_return' in comp_returns:
+            data_dict['portfolio_return'] = comp_returns['portfolio_return']
+        if 'benchmark_return' in comp_returns:
+            data_dict['benchmark_return'] = comp_returns['benchmark_return']
         
         # Determine path - use hierarchy if available, otherwise use component_id
         path = hierarchy_paths.get(component_id, component_id)
