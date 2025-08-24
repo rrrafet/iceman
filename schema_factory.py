@@ -196,55 +196,93 @@ class RiskSchemaFactory:
                                 # Update schema with better asset names
                                 schema.asset_names = asset_names
                     
-                    # Extract core metrics from portfolio decomposer
+                    # Extract data from all three decomposers to populate multi-lens structure
+                    
+                    # PORTFOLIO LENS
                     if hasattr(hierarchical_context, 'portfolio_decomposer'):
-                        decomposer = hierarchical_context.portfolio_decomposer
-                        schema.set_core_metrics(
-                            total_risk=decomposer.portfolio_volatility,
-                            factor_risk_contribution=decomposer.factor_risk_contribution,
-                            specific_risk_contribution=decomposer.specific_risk_contribution
-                        )
+                        portfolio_decomposer = hierarchical_context.portfolio_decomposer
                         
-                        # Set contributions and exposures
-                        schema.set_asset_contributions(decomposer.asset_total_contributions)
-                        schema.set_factor_contributions(decomposer.factor_contributions)
-                        schema.set_factor_exposures(decomposer.portfolio_factor_exposure)
+                        # Portfolio lens - new structure
+                        schema.set_lens_core_metrics(
+                            'portfolio',
+                            total_risk=portfolio_decomposer.portfolio_volatility,
+                            factor_risk_contribution=portfolio_decomposer.factor_risk_contribution,
+                            specific_risk_contribution=portfolio_decomposer.specific_risk_contribution
+                        )
+                        schema.set_lens_factor_exposures('portfolio', portfolio_decomposer.portfolio_factor_exposure)
+                        schema.set_lens_asset_contributions('portfolio', portfolio_decomposer.asset_total_contributions)
+                        schema.set_lens_factor_contributions('portfolio', portfolio_decomposer.factor_contributions)
+                        
+                        # Legacy structure (backward compatibility)
+                        schema.set_core_metrics(
+                            total_risk=portfolio_decomposer.portfolio_volatility,
+                            factor_risk_contribution=portfolio_decomposer.factor_risk_contribution,
+                            specific_risk_contribution=portfolio_decomposer.specific_risk_contribution
+                        )
+                        schema.set_asset_contributions(portfolio_decomposer.asset_total_contributions)
+                        schema.set_factor_contributions(portfolio_decomposer.factor_contributions)
+                        schema.set_factor_exposures(portfolio_decomposer.portfolio_factor_exposure)
+                        
+                        # Portfolio weights
+                        if 'portfolio_weights' in portfolio_decomposer._results:
+                            schema.set_portfolio_weights(portfolio_decomposer._results['portfolio_weights'])
                         
                         # Set validation results
-                        validation_results = decomposer.validate_contributions()
+                        validation_results = portfolio_decomposer.validate_contributions()
                         schema.set_validation_results(validation_results)
+                    
+                    # BENCHMARK LENS
+                    if hasattr(hierarchical_context, 'benchmark_decomposer'):
+                        benchmark_decomposer = hierarchical_context.benchmark_decomposer
                         
-                        # Extract weights from the correct decomposers
-                        # Portfolio weights from portfolio_decomposer
-                        if 'portfolio_weights' in decomposer._results:
-                            schema.set_portfolio_weights(decomposer._results['portfolio_weights'])
+                        # Benchmark lens - new structure
+                        schema.set_lens_core_metrics(
+                            'benchmark',
+                            total_risk=benchmark_decomposer.portfolio_volatility,
+                            factor_risk_contribution=benchmark_decomposer.factor_risk_contribution,
+                            specific_risk_contribution=benchmark_decomposer.specific_risk_contribution
+                        )
+                        schema.set_lens_factor_exposures('benchmark', benchmark_decomposer.portfolio_factor_exposure)
+                        schema.set_lens_asset_contributions('benchmark', benchmark_decomposer.asset_total_contributions)
+                        schema.set_lens_factor_contributions('benchmark', benchmark_decomposer.factor_contributions)
                         
-                        # Benchmark weights from benchmark_decomposer (stored in portfolio_weights key)
-                        if hasattr(hierarchical_context, 'benchmark_decomposer'):
-                            benchmark_decomposer = hierarchical_context.benchmark_decomposer
-                            if 'portfolio_weights' in benchmark_decomposer._results:
-                                schema.set_benchmark_weights(benchmark_decomposer._results['portfolio_weights'])
+                        # Benchmark weights (stored in portfolio_weights key)
+                        if 'portfolio_weights' in benchmark_decomposer._results:
+                            schema.set_benchmark_weights(benchmark_decomposer._results['portfolio_weights'])
+                    
+                    # ACTIVE LENS
+                    if hasattr(hierarchical_context, 'active_decomposer'):
+                        active_decomposer = hierarchical_context.active_decomposer
                         
-                        # Active weights from active_decomposer (calculate as portfolio - benchmark)
-                        if hasattr(hierarchical_context, 'active_decomposer'):
-                            active_decomposer = hierarchical_context.active_decomposer
-                            # Check if active decomposer has both portfolio and benchmark weights
-                            if ('portfolio_weights' in active_decomposer._results and 
-                                'benchmark_weights' in active_decomposer._results):
-                                active_portfolio = active_decomposer._results['portfolio_weights']
-                                active_benchmark = active_decomposer._results['benchmark_weights']
-                                active_weights = active_portfolio - active_benchmark
-                                schema.set_active_weights(active_weights, auto_calculate=False)
-                            elif 'portfolio_weights' in active_decomposer._results:
-                                # Fallback: use portfolio_weights directly if benchmark not available
-                                schema.set_active_weights(active_decomposer._results['portfolio_weights'], auto_calculate=False)
-                            
-                            active_metrics = {
-                                'total_active_risk': active_decomposer.portfolio_volatility,
-                                'active_factor_risk': active_decomposer.factor_risk_contribution,
-                                'active_specific_risk': active_decomposer.specific_risk_contribution
-                            }
-                            schema.set_active_risk_metrics(active_metrics)
+                        # Active lens - new structure
+                        schema.set_lens_core_metrics(
+                            'active',
+                            total_risk=active_decomposer.portfolio_volatility,
+                            factor_risk_contribution=active_decomposer.factor_risk_contribution,
+                            specific_risk_contribution=active_decomposer.specific_risk_contribution
+                        )
+                        schema.set_lens_factor_exposures('active', active_decomposer.portfolio_factor_exposure)
+                        schema.set_lens_asset_contributions('active', active_decomposer.asset_total_contributions)
+                        schema.set_lens_factor_contributions('active', active_decomposer.factor_contributions)
+                        
+                        # Active weights calculation
+                        if ('portfolio_weights' in active_decomposer._results and 
+                            'benchmark_weights' in active_decomposer._results):
+                            active_portfolio = active_decomposer._results['portfolio_weights']
+                            active_benchmark = active_decomposer._results['benchmark_weights']
+                            active_weights = active_portfolio - active_benchmark
+                            schema.set_active_weights(active_weights, auto_calculate=False)
+                        elif 'portfolio_weights' in active_decomposer._results:
+                            # Fallback: use portfolio_weights directly if benchmark not available
+                            schema.set_active_weights(active_decomposer._results['portfolio_weights'], auto_calculate=False)
+                        
+                        # Legacy active risk metrics for backward compatibility
+                        active_metrics = {
+                            'total_active_risk': active_decomposer.portfolio_volatility,
+                            'active_factor_risk': active_decomposer.factor_risk_contribution,
+                            'active_specific_risk': active_decomposer.specific_risk_contribution
+                        }
+                        schema.set_active_risk_metrics(active_metrics)
                         
                         # Add context information
                         schema.add_context_info('component_id', component_id)

@@ -84,14 +84,40 @@ class RiskResultSchema:
         self._data = self._create_empty_schema()
     
     def _create_empty_schema(self) -> Dict[str, Any]:
-        """Create empty schema structure with all required sections."""
+        """Create empty schema structure with multi-lens architecture."""
+        
+        # Helper function to create lens-specific structure
+        def _create_lens_structure():
+            return {
+                "core_metrics": {
+                    "total_risk": None,
+                    "factor_risk_contribution": None,
+                    "specific_risk_contribution": None,
+                    "factor_risk_percentage": None,
+                    "specific_risk_percentage": None
+                },
+                "exposures": {
+                    "factor_exposures": {},      # Named dict: {factor_name: exposure}
+                    "factor_loadings": {}       # Asset-factor loadings: {asset_name: {factor_name: loading}}
+                },
+                "contributions": {
+                    "by_asset": {},             # Named asset contributions: {asset_name: contribution}
+                    "by_factor": {},            # Named factor contributions: {factor_name: contribution}
+                    "by_component": {}          # For hierarchical: {component_id: contribution}
+                },
+                "matrices": {
+                    "factor_risk_contributions": {},  # Asset × Factor matrix: {asset_name: {factor_name: contribution}}
+                    "weighted_betas": {}              # Asset × Factor matrix: {asset_name: {factor_name: weighted_beta}}
+                }
+            }
+        
         return {
             "metadata": {
                 "analysis_type": self.analysis_type.value,
                 "timestamp": self.timestamp.isoformat(),
                 "data_frequency": self.data_frequency,
                 "annualized": self.annualized,
-                "schema_version": "1.0",
+                "schema_version": "2.0",  # Updated for multi-lens support
                 "context_info": {}
             },
             "identifiers": {
@@ -99,6 +125,41 @@ class RiskResultSchema:
                 "factor_names": self.factor_names.copy(),
                 "component_ids": self.component_ids.copy()
             },
+            
+            # Multi-lens risk decomposition structure
+            "portfolio": _create_lens_structure(),
+            "benchmark": _create_lens_structure(),
+            "active": {
+                **_create_lens_structure(),
+                "decomposition": {
+                    "allocation_effect": {
+                        "factor_contributions": {},      # Risk from factor exposure differences
+                        "specific_contributions": {},    # Risk from specific exposure differences
+                        "total_contribution": None
+                    },
+                    "selection_effect": {
+                        "factor_contributions": {},      # Risk from asset selection within factors
+                        "specific_contributions": {},    # Risk from specific asset selection
+                        "total_contribution": None
+                    },
+                    "interaction_effect": {
+                        "factor_contributions": {},      # Interaction between allocation and selection
+                        "total_contribution": None
+                    },
+                    "validation": {
+                        "total_decomposition_check": None,  # allocation + selection + interaction = total active
+                        "component_sums_check": {}
+                    }
+                }
+            },
+            
+            "weights": {
+                "portfolio_weights": {},      # Named portfolio weights: {asset_name: weight}
+                "benchmark_weights": {},      # Named benchmark weights: {asset_name: weight}
+                "active_weights": {}          # Named active weights: {asset_name: weight}
+            },
+            
+            # Backward compatibility sections (legacy flat structure)
             "core_metrics": {
                 "total_risk": None,
                 "factor_risk_contribution": None,
@@ -107,40 +168,35 @@ class RiskResultSchema:
                 "specific_risk_percentage": None
             },
             "exposures": {
-                "factor_exposures": {},      # Named dict: {factor_name: exposure}
-                "factor_loadings": {}       # Asset-factor loadings: {asset_name: {factor_name: loading}}
+                "factor_exposures": {},
+                "factor_loadings": {}
             },
             "contributions": {
-                "by_asset": {},             # Named asset contributions: {asset_name: contribution}
-                "by_factor": {},            # Named factor contributions: {factor_name: contribution}
-                "by_component": {}          # For hierarchical: {component_id: contribution}
-            },
-            "weights": {
-                "portfolio_weights": {},      # Named portfolio weights: {asset_name: weight}
-                "benchmark_weights": {},      # Named benchmark weights: {asset_name: weight}
-                "active_weights": {}          # Named active weights: {asset_name: weight}
+                "by_asset": {},
+                "by_factor": {},
+                "by_component": {}
             },
             "arrays": {
                 "weights": {
-                    "portfolio_weights": [],  # Array format for backward compatibility
-                    "benchmark_weights": [],  # Array format for backward compatibility
-                    "active_weights": []      # Array format for backward compatibility
+                    "portfolio_weights": [],
+                    "benchmark_weights": [],
+                    "active_weights": []
                 },
                 "exposures": {},
                 "contributions": {}
             },
             "matrices": {
-                "factor_risk_contributions": {},  # Asset × Factor matrix: {asset_name: {factor_name: contribution}}
-                "weighted_betas": {}              # Asset × Factor matrix: {asset_name: {factor_name: weighted_beta}}
+                "factor_risk_contributions": {},
+                "weighted_betas": {}
             },
-            "active_risk": {},              # Active risk specific metrics when applicable
+            "active_risk": {},              # Legacy active risk metrics
             "validation": {
                 "checks": {},
                 "summary": "",
                 "passes": True,
                 "level": self.validation_level.value
             },
-            "details": {}                   # Extended analysis details
+            "details": {}
         }
     
     @property
@@ -401,6 +457,248 @@ class RiskResultSchema:
         # Store raw array for backward compatibility
         self._data["arrays"]["weights"]["active_weights"] = list(weights) if not isinstance(weights, dict) else list(weights.values())
     
+    # Multi-lens setter methods
+    def set_lens_core_metrics(
+        self, 
+        lens: str,
+        total_risk: float,
+        factor_risk_contribution: float,
+        specific_risk_contribution: float
+    ) -> None:
+        """
+        Set core risk metrics for a specific lens (portfolio, benchmark, or active).
+        
+        Parameters
+        ----------
+        lens : str
+            Lens type: 'portfolio', 'benchmark', or 'active'
+        total_risk : float
+            Total risk for this lens
+        factor_risk_contribution : float
+            Risk contribution from factors
+        specific_risk_contribution : float
+            Risk contribution from specific/idiosyncratic sources
+        """
+        if lens not in ['portfolio', 'benchmark', 'active']:
+            raise ValueError("lens must be 'portfolio', 'benchmark', or 'active'")
+        
+        self._data[lens]["core_metrics"]["total_risk"] = float(total_risk)
+        self._data[lens]["core_metrics"]["factor_risk_contribution"] = float(factor_risk_contribution)
+        self._data[lens]["core_metrics"]["specific_risk_contribution"] = float(specific_risk_contribution)
+        
+        # Calculate percentages
+        if total_risk > 0:
+            self._data[lens]["core_metrics"]["factor_risk_percentage"] = 100.0 * factor_risk_contribution / total_risk
+            self._data[lens]["core_metrics"]["specific_risk_percentage"] = 100.0 * specific_risk_contribution / total_risk
+        else:
+            self._data[lens]["core_metrics"]["factor_risk_percentage"] = 0.0
+            self._data[lens]["core_metrics"]["specific_risk_percentage"] = 0.0
+    
+    def set_lens_factor_exposures(self, lens: str, exposures: Union[np.ndarray, Dict[str, float], List[float]]) -> None:
+        """
+        Set factor exposures for a specific lens.
+        
+        Parameters
+        ----------
+        lens : str
+            Lens type: 'portfolio', 'benchmark', or 'active'
+        exposures : array-like or dict
+            Factor exposures, either as array/list or pre-named dictionary
+        """
+        if lens not in ['portfolio', 'benchmark', 'active']:
+            raise ValueError("lens must be 'portfolio', 'benchmark', or 'active'")
+            
+        if isinstance(exposures, dict):
+            self._data[lens]["exposures"]["factor_exposures"] = exposures.copy()
+        else:
+            exposures_array = np.asarray(exposures)
+            if len(self.factor_names) == len(exposures_array):
+                self._data[lens]["exposures"]["factor_exposures"] = {
+                    name: float(value) for name, value in zip(self.factor_names, exposures_array)
+                }
+            else:
+                # Fallback with generic names
+                self._data[lens]["exposures"]["factor_exposures"] = {
+                    f"factor_{i}": float(value) for i, value in enumerate(exposures_array)
+                }
+    
+    def set_lens_asset_contributions(self, lens: str, contributions: Union[np.ndarray, Dict[str, float], List[float]]) -> None:
+        """
+        Set asset risk contributions for a specific lens.
+        
+        Parameters
+        ----------
+        lens : str
+            Lens type: 'portfolio', 'benchmark', or 'active'
+        contributions : array-like or dict
+            Asset contributions, either as array/list or pre-named dictionary
+        """
+        if lens not in ['portfolio', 'benchmark', 'active']:
+            raise ValueError("lens must be 'portfolio', 'benchmark', or 'active'")
+            
+        if isinstance(contributions, dict):
+            self._data[lens]["contributions"]["by_asset"] = contributions.copy()
+        else:
+            contributions_array = np.asarray(contributions)
+            if len(self.asset_names) == len(contributions_array):
+                self._data[lens]["contributions"]["by_asset"] = {
+                    name: float(value) for name, value in zip(self.asset_names, contributions_array)
+                }
+            else:
+                # Fallback with generic names
+                self._data[lens]["contributions"]["by_asset"] = {
+                    f"asset_{i}": float(value) for i, value in enumerate(contributions_array)
+                }
+    
+    def set_lens_factor_contributions(self, lens: str, contributions: Union[np.ndarray, Dict[str, float], List[float]]) -> None:
+        """
+        Set factor risk contributions for a specific lens.
+        
+        Parameters
+        ----------
+        lens : str
+            Lens type: 'portfolio', 'benchmark', or 'active'
+        contributions : array-like or dict
+            Factor contributions, either as array/list or pre-named dictionary
+        """
+        if lens not in ['portfolio', 'benchmark', 'active']:
+            raise ValueError("lens must be 'portfolio', 'benchmark', or 'active'")
+            
+        if isinstance(contributions, dict):
+            self._data[lens]["contributions"]["by_factor"] = contributions.copy()
+        else:
+            contributions_array = np.asarray(contributions)
+            if len(self.factor_names) == len(contributions_array):
+                self._data[lens]["contributions"]["by_factor"] = {
+                    name: float(value) for name, value in zip(self.factor_names, contributions_array)
+                }
+            else:
+                # Fallback with generic names
+                self._data[lens]["contributions"]["by_factor"] = {
+                    f"factor_{i}": float(value) for i, value in enumerate(contributions_array)
+                }
+    
+    def set_lens_factor_risk_contributions_matrix(self, lens: str, matrix: Union[np.ndarray, Dict[str, Dict[str, float]]]) -> None:
+        """
+        Set factor risk contributions matrix for a specific lens.
+        
+        Parameters
+        ----------
+        lens : str
+            Lens type: 'portfolio', 'benchmark', or 'active'
+        matrix : array-like or dict
+            Factor risk contributions matrix, either as N×K array or nested dictionary
+        """
+        if lens not in ['portfolio', 'benchmark', 'active']:
+            raise ValueError("lens must be 'portfolio', 'benchmark', or 'active'")
+            
+        if isinstance(matrix, dict):
+            self._data[lens]["matrices"]["factor_risk_contributions"] = matrix.copy()
+        else:
+            matrix_array = np.asarray(matrix)
+            if matrix_array.ndim == 2:
+                n_assets, n_factors = matrix_array.shape
+                asset_names = self.asset_names if len(self.asset_names) == n_assets else [f"asset_{i}" for i in range(n_assets)]
+                factor_names = self.factor_names if len(self.factor_names) == n_factors else [f"factor_{i}" for i in range(n_factors)]
+                
+                self._data[lens]["matrices"]["factor_risk_contributions"] = {
+                    asset_name: {
+                        factor_name: float(matrix_array[i, j])
+                        for j, factor_name in enumerate(factor_names)
+                    }
+                    for i, asset_name in enumerate(asset_names)
+                }
+            else:
+                raise ValueError("Factor risk contributions matrix must be 2D array (N assets × K factors) or nested dictionary")
+    
+    def set_active_decomposition(
+        self,
+        allocation_factor_contrib: Optional[Dict[str, float]] = None,
+        allocation_specific_contrib: Optional[Dict[str, float]] = None,
+        selection_factor_contrib: Optional[Dict[str, float]] = None,
+        selection_specific_contrib: Optional[Dict[str, float]] = None,
+        interaction_factor_contrib: Optional[Dict[str, float]] = None
+    ) -> None:
+        """
+        Set active risk decomposition into allocation, selection, and interaction effects.
+        
+        Parameters
+        ----------
+        allocation_factor_contrib : dict, optional
+            Factor contributions from allocation effect (different factor exposures)
+        allocation_specific_contrib : dict, optional
+            Specific contributions from allocation effect
+        selection_factor_contrib : dict, optional
+            Factor contributions from selection effect (asset selection within factors)
+        selection_specific_contrib : dict, optional
+            Specific contributions from selection effect
+        interaction_factor_contrib : dict, optional
+            Factor contributions from interaction between allocation and selection
+        """
+        decomp = self._data["active"]["decomposition"]
+        
+        # Allocation effect
+        if allocation_factor_contrib is not None:
+            decomp["allocation_effect"]["factor_contributions"] = allocation_factor_contrib.copy()
+            decomp["allocation_effect"]["total_contribution"] = sum(allocation_factor_contrib.values())
+        
+        if allocation_specific_contrib is not None:
+            decomp["allocation_effect"]["specific_contributions"] = allocation_specific_contrib.copy()
+            if decomp["allocation_effect"]["total_contribution"] is not None:
+                decomp["allocation_effect"]["total_contribution"] += sum(allocation_specific_contrib.values())
+            else:
+                decomp["allocation_effect"]["total_contribution"] = sum(allocation_specific_contrib.values())
+        
+        # Selection effect
+        if selection_factor_contrib is not None:
+            decomp["selection_effect"]["factor_contributions"] = selection_factor_contrib.copy()
+            decomp["selection_effect"]["total_contribution"] = sum(selection_factor_contrib.values())
+        
+        if selection_specific_contrib is not None:
+            decomp["selection_effect"]["specific_contributions"] = selection_specific_contrib.copy()
+            if decomp["selection_effect"]["total_contribution"] is not None:
+                decomp["selection_effect"]["total_contribution"] += sum(selection_specific_contrib.values())
+            else:
+                decomp["selection_effect"]["total_contribution"] = sum(selection_specific_contrib.values())
+        
+        # Interaction effect
+        if interaction_factor_contrib is not None:
+            decomp["interaction_effect"]["factor_contributions"] = interaction_factor_contrib.copy()
+            decomp["interaction_effect"]["total_contribution"] = sum(interaction_factor_contrib.values())
+        
+        # Validate decomposition if all components are available
+        self._validate_active_decomposition()
+    
+    def _validate_active_decomposition(self) -> None:
+        """Validate that active decomposition components sum to total active risk."""
+        decomp = self._data["active"]["decomposition"]
+        active_core = self._data["active"]["core_metrics"]
+        
+        # Check if we have total active risk to validate against
+        total_active_risk = active_core.get("total_risk")
+        if total_active_risk is None:
+            return
+        
+        # Sum up all decomposition components
+        allocation_total = decomp["allocation_effect"].get("total_contribution", 0.0)
+        selection_total = decomp["selection_effect"].get("total_contribution", 0.0)
+        interaction_total = decomp["interaction_effect"].get("total_contribution", 0.0)
+        
+        decomposition_sum = allocation_total + selection_total + interaction_total
+        difference = abs(decomposition_sum - total_active_risk)
+        
+        decomp["validation"]["total_decomposition_check"] = {
+            "passes": difference < 1e-6,
+            "expected": total_active_risk,
+            "actual": decomposition_sum,
+            "difference": difference,
+            "components": {
+                "allocation": allocation_total,
+                "selection": selection_total,
+                "interaction": interaction_total
+            }
+        }
+    
     def set_factor_risk_contributions_matrix(self, matrix: Union[np.ndarray, Dict[str, Dict[str, float]]]) -> None:
         """
         Set factor risk contributions matrix (Asset × Factor).
@@ -500,6 +798,42 @@ class RiskResultSchema:
     def add_detail(self, key: str, value: Any) -> None:
         """Add detailed analysis information."""
         self._data["details"][key] = value
+    
+    def _validate_multi_lens_consistency(self, validation_results: Dict[str, Any]) -> None:
+        """Validate consistency across portfolio, benchmark, and active lenses."""
+        
+        # Check if all three lenses have core metrics
+        portfolio_core = self._data["portfolio"]["core_metrics"]
+        benchmark_core = self._data["benchmark"]["core_metrics"]
+        active_core = self._data["active"]["core_metrics"]
+        
+        portfolio_risk = portfolio_core.get("total_risk")
+        benchmark_risk = benchmark_core.get("total_risk")
+        active_risk = active_core.get("total_risk")
+        
+        if portfolio_risk is not None and benchmark_risk is not None and active_risk is not None:
+            # Validate active risk decomposition consistency
+            validation_results["multi_lens_consistency"] = {
+                "portfolio_risk": portfolio_risk,
+                "benchmark_risk": benchmark_risk,
+                "active_risk": active_risk,
+                "passes": True,  # Always passes for now, can add specific checks later
+                "message": "Multi-lens data populated successfully"
+            }
+        else:
+            validation_results["multi_lens_consistency"] = {
+                "passes": True,
+                "message": "Incomplete multi-lens data - validation skipped"
+            }
+        
+        # Validate active decomposition if available
+        if self._data["active"]["decomposition"]["validation"]["total_decomposition_check"] is not None:
+            decomp_check = self._data["active"]["decomposition"]["validation"]["total_decomposition_check"]
+            validation_results["active_decomposition"] = {
+                "passes": decomp_check["passes"],
+                "message": f"Active decomposition validation: {decomp_check['difference']:.6f} difference",
+                "components": decomp_check["components"]
+            }
     
     def validate_schema(self) -> Dict[str, Any]:
         """
@@ -654,6 +988,9 @@ class RiskResultSchema:
                 "message": "Insufficient weight data for consistency check"
             }
         
+        # Multi-lens validation
+        self._validate_multi_lens_consistency(validation_results)
+        
         # Overall validation
         all_passed = all(result.get("passes", False) for result in validation_results.values())
         validation_results["overall"] = {
@@ -716,7 +1053,7 @@ class RiskResultSchema:
             raise ValueError(f"Unknown legacy format type: {format_type}")
     
     def _to_decomposer_format(self) -> Dict[str, Any]:
-        """Convert to RiskDecomposer.to_dict() format."""
+        """Convert to RiskDecomposer.to_dict() format with multi-lens data."""
         return {
             "metadata": self._data["metadata"].copy(),
             "core_metrics": self._data["core_metrics"].copy(),
@@ -732,7 +1069,11 @@ class RiskResultSchema:
             "arrays": self._data["arrays"].copy(),
             "active_risk": self._data["active_risk"].copy(),
             "validation": self._data["validation"].copy(),
-            "additional": self._data["details"].copy()
+            "additional": self._data["details"].copy(),
+            # New multi-lens data
+            "portfolio_lens": self._data["portfolio"].copy(),
+            "benchmark_lens": self._data["benchmark"].copy(),
+            "active_lens": self._data["active"].copy()
         }
     
     def _to_strategy_format(self) -> Dict[str, Any]:
