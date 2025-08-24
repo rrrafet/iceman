@@ -126,6 +126,50 @@ class RiskResultSchema:
                 "component_ids": self.component_ids.copy()
             },
             
+            # Hierarchical structure information
+            "hierarchy": {
+                "root_component": None,                    # Root component ID
+                "component_relationships": {},             # {component_id: {"parent": parent_id, "children": [child_ids]}}
+                "component_metadata": {},                  # {component_id: {"type": "node"/"leaf", "level": int, "path": str, ...}}
+                "adjacency_list": {},                      # Graph adjacency representation {parent: [children]}
+                "tree_structure": {},                      # Nested tree representation
+                "traversal_order": [],                     # Component IDs in traversal order
+                "leaf_components": [],                     # List of leaf component IDs
+                "path_mappings": {},                       # {component_id: full_path_string}
+                "level_mappings": {}                       # {level: [component_ids_at_level]}
+            },
+            
+            # Time series data for all components
+            "time_series": {
+                "portfolio_returns": {},                       # {component_id: [return_series]}
+                "benchmark_returns": {},                       # {component_id: [return_series]}
+                "active_returns": {},                          # {component_id: [return_series]} 
+                "factor_returns": {},                          # {factor_name: [return_series]}
+                "dates": [],                                   # Date index for time series
+                "frequency": None,                             # Data frequency (daily, monthly, etc.)
+                "currency": None,                              # Currency for returns
+                "metadata": {
+                    "start_date": None,                        # First date in series
+                    "end_date": None,                          # Last date in series
+                    "total_periods": 0,                        # Number of periods
+                    "missing_data_policy": "forward_fill",     # How missing data was handled
+                    "return_type": "simple",                   # simple, log, excess
+                    "annualization_factor": 252               # Business days for annualization
+                },
+                "statistics": {
+                    "portfolio": {},                           # {component_id: {"mean": x, "std": y, "sharpe": z, ...}}
+                    "benchmark": {},                           # Summary stats for benchmark returns
+                    "active": {},                              # Summary stats for active returns
+                    "factor": {}                               # Summary stats for factor returns
+                },
+                "correlations": {
+                    "portfolio_vs_benchmark": {},             # {component_id: correlation_value}
+                    "portfolio_vs_factors": {},               # {component_id: {factor_name: correlation}}
+                    "factor_correlations": {},                # {factor1: {factor2: correlation}}
+                    "hierarchical_correlations": {}           # Parent-child correlations within hierarchy
+                }
+            },
+            
             # Multi-lens risk decomposition structure
             "portfolio": _create_lens_structure(),
             "benchmark": _create_lens_structure(),
@@ -699,6 +743,570 @@ class RiskResultSchema:
             }
         }
     
+    def set_hierarchy_structure(
+        self,
+        root_component: str,
+        component_relationships: Dict[str, Dict[str, Any]],
+        component_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
+        adjacency_list: Optional[Dict[str, List[str]]] = None,
+        tree_structure: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        Set the hierarchical structure of the portfolio.
+        
+        Parameters
+        ----------
+        root_component : str
+            Root component identifier
+        component_relationships : dict
+            Component parent/child relationships: {component_id: {"parent": parent_id, "children": [child_ids]}}
+        component_metadata : dict, optional
+            Component metadata: {component_id: {"type": "node"/"leaf", "level": int, "path": str, ...}}
+        adjacency_list : dict, optional
+            Graph adjacency representation: {parent: [children]}
+        tree_structure : dict, optional
+            Nested tree representation
+        """
+        hierarchy = self._data["hierarchy"]
+        
+        hierarchy["root_component"] = root_component
+        hierarchy["component_relationships"] = component_relationships.copy()
+        
+        if component_metadata:
+            hierarchy["component_metadata"] = component_metadata.copy()
+        
+        if adjacency_list:
+            hierarchy["adjacency_list"] = adjacency_list.copy()
+        
+        if tree_structure:
+            hierarchy["tree_structure"] = tree_structure.copy()
+        
+        # Auto-generate derived information
+        self._generate_hierarchy_derived_info()
+    
+    def _generate_hierarchy_derived_info(self) -> None:
+        """Generate derived hierarchy information like paths, levels, and leaf components."""
+        hierarchy = self._data["hierarchy"]
+        relationships = hierarchy["component_relationships"]
+        metadata = hierarchy["component_metadata"]
+        
+        # Generate leaf components list
+        leaf_components = []
+        for component_id, relationship in relationships.items():
+            if not relationship.get("children") or len(relationship["children"]) == 0:
+                leaf_components.append(component_id)
+        hierarchy["leaf_components"] = leaf_components
+        
+        # Generate path mappings from metadata
+        path_mappings = {}
+        level_mappings = {}
+        for component_id, meta in metadata.items():
+            if "path" in meta:
+                path_mappings[component_id] = meta["path"]
+            if "level" in meta:
+                level = meta["level"]
+                if level not in level_mappings:
+                    level_mappings[level] = []
+                level_mappings[level].append(component_id)
+        
+        hierarchy["path_mappings"] = path_mappings
+        hierarchy["level_mappings"] = level_mappings
+        
+        # Generate traversal order (breadth-first)
+        if hierarchy["root_component"]:
+            traversal_order = self._generate_traversal_order(hierarchy["root_component"], relationships)
+            hierarchy["traversal_order"] = traversal_order
+    
+    def _generate_traversal_order(self, root: str, relationships: Dict[str, Dict[str, Any]]) -> List[str]:
+        """Generate breadth-first traversal order of the hierarchy."""
+        traversal = []
+        queue = [root]
+        visited = set()
+        
+        while queue:
+            current = queue.pop(0)
+            if current not in visited:
+                visited.add(current)
+                traversal.append(current)
+                
+                # Add children to queue
+                if current in relationships and "children" in relationships[current]:
+                    children = relationships[current]["children"]
+                    if children:
+                        queue.extend(children)
+        
+        return traversal
+    
+    def add_component_relationship(self, component_id: str, parent_id: Optional[str] = None, 
+                                 children: Optional[List[str]] = None) -> None:
+        """
+        Add or update a single component's relationships.
+        
+        Parameters
+        ----------
+        component_id : str
+            Component identifier
+        parent_id : str, optional
+            Parent component identifier
+        children : list of str, optional
+            List of child component identifiers
+        """
+        hierarchy = self._data["hierarchy"]
+        
+        if "component_relationships" not in hierarchy:
+            hierarchy["component_relationships"] = {}
+        
+        relationship = hierarchy["component_relationships"].get(component_id, {})
+        
+        if parent_id is not None:
+            relationship["parent"] = parent_id
+        
+        if children is not None:
+            relationship["children"] = children.copy()
+        
+        hierarchy["component_relationships"][component_id] = relationship
+        
+        # Regenerate derived info
+        self._generate_hierarchy_derived_info()
+    
+    def add_component_metadata(self, component_id: str, metadata: Dict[str, Any]) -> None:
+        """
+        Add or update metadata for a component.
+        
+        Parameters
+        ----------
+        component_id : str
+            Component identifier
+        metadata : dict
+            Metadata dictionary (e.g., {"type": "leaf", "level": 3, "path": "portfolio/equity/us"})
+        """
+        hierarchy = self._data["hierarchy"]
+        
+        if "component_metadata" not in hierarchy:
+            hierarchy["component_metadata"] = {}
+        
+        hierarchy["component_metadata"][component_id] = metadata.copy()
+        
+        # Regenerate derived info
+        self._generate_hierarchy_derived_info()
+    
+    def get_hierarchy_summary(self) -> Dict[str, Any]:
+        """Get a summary of the hierarchical structure."""
+        hierarchy = self._data["hierarchy"]
+        
+        return {
+            "root_component": hierarchy.get("root_component"),
+            "total_components": len(hierarchy.get("component_relationships", {})),
+            "leaf_components": len(hierarchy.get("leaf_components", [])),
+            "max_depth": max(hierarchy.get("level_mappings", {}).keys()) if hierarchy.get("level_mappings") else 0,
+            "components_by_level": {level: len(components) for level, components in hierarchy.get("level_mappings", {}).items()},
+            "has_complete_structure": bool(
+                hierarchy.get("root_component") and 
+                hierarchy.get("component_relationships") and 
+                hierarchy.get("component_metadata")
+            )
+        }
+    
+    # Time Series Methods
+    def set_time_series_metadata(
+        self,
+        dates: List[Any],
+        frequency: str = "daily",
+        currency: str = "USD",
+        return_type: str = "simple",
+        annualization_factor: int = 252
+    ) -> None:
+        """
+        Set time series metadata and date index.
+        
+        Parameters
+        ----------
+        dates : list
+            Date index for the time series
+        frequency : str, default "daily"
+            Data frequency (daily, monthly, quarterly, annual)
+        currency : str, default "USD"
+            Currency for returns
+        return_type : str, default "simple"
+            Type of returns (simple, log, excess)
+        annualization_factor : int, default 252
+            Number of periods for annualization
+        """
+        self._data["time_series"]["dates"] = list(dates)
+        self._data["time_series"]["frequency"] = frequency
+        self._data["time_series"]["currency"] = currency
+        
+        metadata = self._data["time_series"]["metadata"]
+        if len(dates) > 0:
+            metadata["start_date"] = dates[0] if hasattr(dates[0], 'strftime') else str(dates[0])
+            metadata["end_date"] = dates[-1] if hasattr(dates[-1], 'strftime') else str(dates[-1])
+            metadata["total_periods"] = len(dates)
+        
+        metadata["return_type"] = return_type
+        metadata["annualization_factor"] = annualization_factor
+    
+    def set_component_portfolio_returns(
+        self,
+        component_id: str,
+        returns: Union[List[float], np.ndarray, pd.Series]
+    ) -> None:
+        """
+        Set portfolio return time series for a specific component.
+        
+        Parameters
+        ----------
+        component_id : str
+            ID of the component (node or leaf)
+        returns : array-like
+            Time series of portfolio returns for this component
+        """
+        if isinstance(returns, pd.Series):
+            return_values = returns.values.tolist()
+        else:
+            return_values = np.asarray(returns).tolist()
+        
+        self._data["time_series"]["portfolio_returns"][component_id] = return_values
+        
+        # Calculate and store basic statistics
+        self._calculate_component_statistics(component_id, return_values, "portfolio")
+    
+    def set_component_benchmark_returns(
+        self,
+        component_id: str,
+        returns: Union[List[float], np.ndarray, pd.Series]
+    ) -> None:
+        """
+        Set benchmark return time series for a specific component.
+        
+        Parameters
+        ----------
+        component_id : str
+            ID of the component (node or leaf)
+        returns : array-like
+            Time series of benchmark returns for this component
+        """
+        if isinstance(returns, pd.Series):
+            return_values = returns.values.tolist()
+        else:
+            return_values = np.asarray(returns).tolist()
+        
+        self._data["time_series"]["benchmark_returns"][component_id] = return_values
+        
+        # Calculate and store basic statistics
+        self._calculate_component_statistics(component_id, return_values, "benchmark")
+        
+        # Calculate active returns if portfolio returns exist
+        if component_id in self._data["time_series"]["portfolio_returns"]:
+            self._calculate_active_returns(component_id)
+    
+    def set_component_active_returns(
+        self,
+        component_id: str,
+        returns: Union[List[float], np.ndarray, pd.Series]
+    ) -> None:
+        """
+        Set active return time series for a specific component.
+        
+        Parameters
+        ----------
+        component_id : str
+            ID of the component (node or leaf)
+        returns : array-like
+            Time series of active returns for this component
+        """
+        if isinstance(returns, pd.Series):
+            return_values = returns.values.tolist()
+        else:
+            return_values = np.asarray(returns).tolist()
+        
+        self._data["time_series"]["active_returns"][component_id] = return_values
+        
+        # Calculate and store basic statistics
+        self._calculate_component_statistics(component_id, return_values, "active")
+    
+    def set_factor_returns(
+        self,
+        factor_name: str,
+        returns: Union[List[float], np.ndarray, pd.Series]
+    ) -> None:
+        """
+        Set return time series for a risk factor.
+        
+        Parameters
+        ----------
+        factor_name : str
+            Name of the risk factor
+        returns : array-like
+            Time series of factor returns
+        """
+        if isinstance(returns, pd.Series):
+            return_values = returns.values.tolist()
+        else:
+            return_values = np.asarray(returns).tolist()
+        
+        self._data["time_series"]["factor_returns"][factor_name] = return_values
+        
+        # Calculate and store basic statistics
+        self._calculate_factor_statistics(factor_name, return_values)
+    
+    def set_multiple_component_returns(
+        self,
+        returns_dict: Dict[str, Dict[str, Union[List[float], np.ndarray, pd.Series]]]
+    ) -> None:
+        """
+        Set time series for multiple components at once.
+        
+        Parameters
+        ----------
+        returns_dict : dict
+            Nested dictionary with structure:
+            {
+                "portfolio": {component_id: returns, ...},
+                "benchmark": {component_id: returns, ...},
+                "active": {component_id: returns, ...},
+                "factor": {factor_name: returns, ...}
+            }
+        """
+        for return_type, components in returns_dict.items():
+            for component_id, returns in components.items():
+                if return_type == "portfolio":
+                    self.set_component_portfolio_returns(component_id, returns)
+                elif return_type == "benchmark":
+                    self.set_component_benchmark_returns(component_id, returns)
+                elif return_type == "active":
+                    self.set_component_active_returns(component_id, returns)
+                elif return_type == "factor":
+                    self.set_factor_returns(component_id, returns)
+    
+    def _calculate_component_statistics(
+        self,
+        component_id: str,
+        returns: List[float],
+        return_type: str
+    ) -> None:
+        """Calculate basic statistics for component returns."""
+        if not returns:
+            return
+        
+        returns_array = np.array(returns)
+        valid_returns = returns_array[~np.isnan(returns_array)]
+        
+        if len(valid_returns) == 0:
+            return
+        
+        stats = {
+            "mean": float(np.mean(valid_returns)),
+            "std": float(np.std(valid_returns, ddof=1)) if len(valid_returns) > 1 else 0.0,
+            "min": float(np.min(valid_returns)),
+            "max": float(np.max(valid_returns)),
+            "skew": float(self._calculate_skewness(valid_returns)),
+            "kurtosis": float(self._calculate_kurtosis(valid_returns)),
+            "total_periods": len(returns),
+            "valid_periods": len(valid_returns)
+        }
+        
+        # Annualized metrics
+        annualization_factor = self._data["time_series"]["metadata"]["annualization_factor"]
+        if stats["std"] > 0:
+            stats["annualized_return"] = stats["mean"] * annualization_factor
+            stats["annualized_volatility"] = stats["std"] * np.sqrt(annualization_factor)
+            stats["sharpe_ratio"] = stats["annualized_return"] / stats["annualized_volatility"]
+        else:
+            stats["annualized_return"] = 0.0
+            stats["annualized_volatility"] = 0.0
+            stats["sharpe_ratio"] = 0.0
+        
+        self._data["time_series"]["statistics"][return_type][component_id] = stats
+    
+    def _calculate_factor_statistics(
+        self,
+        factor_name: str,
+        returns: List[float]
+    ) -> None:
+        """Calculate basic statistics for factor returns."""
+        if not returns:
+            return
+        
+        returns_array = np.array(returns)
+        valid_returns = returns_array[~np.isnan(returns_array)]
+        
+        if len(valid_returns) == 0:
+            return
+        
+        stats = {
+            "mean": float(np.mean(valid_returns)),
+            "std": float(np.std(valid_returns, ddof=1)) if len(valid_returns) > 1 else 0.0,
+            "min": float(np.min(valid_returns)),
+            "max": float(np.max(valid_returns)),
+            "skew": float(self._calculate_skewness(valid_returns)),
+            "kurtosis": float(self._calculate_kurtosis(valid_returns)),
+            "total_periods": len(returns),
+            "valid_periods": len(valid_returns)
+        }
+        
+        # Annualized metrics
+        annualization_factor = self._data["time_series"]["metadata"]["annualization_factor"]
+        if stats["std"] > 0:
+            stats["annualized_return"] = stats["mean"] * annualization_factor
+            stats["annualized_volatility"] = stats["std"] * np.sqrt(annualization_factor)
+        else:
+            stats["annualized_return"] = 0.0
+            stats["annualized_volatility"] = 0.0
+        
+        self._data["time_series"]["statistics"]["factor"][factor_name] = stats
+    
+    def _calculate_active_returns(self, component_id: str) -> None:
+        """Calculate active returns as portfolio - benchmark for a component."""
+        portfolio_returns = self._data["time_series"]["portfolio_returns"].get(component_id, [])
+        benchmark_returns = self._data["time_series"]["benchmark_returns"].get(component_id, [])
+        
+        if portfolio_returns and benchmark_returns and len(portfolio_returns) == len(benchmark_returns):
+            active_returns = [p - b for p, b in zip(portfolio_returns, benchmark_returns)]
+            self._data["time_series"]["active_returns"][component_id] = active_returns
+            self._calculate_component_statistics(component_id, active_returns, "active")
+    
+    def _calculate_skewness(self, returns: np.ndarray) -> float:
+        """Calculate skewness of returns."""
+        if len(returns) < 3:
+            return 0.0
+        
+        mean = np.mean(returns)
+        std = np.std(returns, ddof=1)
+        if std == 0:
+            return 0.0
+        
+        n = len(returns)
+        skew = (n / ((n - 1) * (n - 2))) * np.sum(((returns - mean) / std) ** 3)
+        return skew
+    
+    def _calculate_kurtosis(self, returns: np.ndarray) -> float:
+        """Calculate excess kurtosis of returns."""
+        if len(returns) < 4:
+            return 0.0
+        
+        mean = np.mean(returns)
+        std = np.std(returns, ddof=1)
+        if std == 0:
+            return 0.0
+        
+        n = len(returns)
+        kurt = (n * (n + 1) / ((n - 1) * (n - 2) * (n - 3))) * np.sum(((returns - mean) / std) ** 4)
+        kurt = kurt - 3 * (n - 1) ** 2 / ((n - 2) * (n - 3))  # Excess kurtosis
+        return kurt
+    
+    def calculate_correlations(self) -> None:
+        """Calculate various correlation metrics between time series."""
+        # Portfolio vs benchmark correlations
+        for component_id in self._data["time_series"]["portfolio_returns"]:
+            if component_id in self._data["time_series"]["benchmark_returns"]:
+                port_returns = np.array(self._data["time_series"]["portfolio_returns"][component_id])
+                bench_returns = np.array(self._data["time_series"]["benchmark_returns"][component_id])
+                
+                if len(port_returns) > 1 and len(bench_returns) > 1:
+                    correlation = np.corrcoef(port_returns, bench_returns)[0, 1]
+                    if not np.isnan(correlation):
+                        self._data["time_series"]["correlations"]["portfolio_vs_benchmark"][component_id] = float(correlation)
+        
+        # Portfolio vs factor correlations
+        for component_id in self._data["time_series"]["portfolio_returns"]:
+            port_returns = np.array(self._data["time_series"]["portfolio_returns"][component_id])
+            
+            if component_id not in self._data["time_series"]["correlations"]["portfolio_vs_factors"]:
+                self._data["time_series"]["correlations"]["portfolio_vs_factors"][component_id] = {}
+            
+            for factor_name, factor_returns in self._data["time_series"]["factor_returns"].items():
+                factor_array = np.array(factor_returns)
+                
+                if len(port_returns) > 1 and len(factor_array) > 1 and len(port_returns) == len(factor_array):
+                    correlation = np.corrcoef(port_returns, factor_array)[0, 1]
+                    if not np.isnan(correlation):
+                        self._data["time_series"]["correlations"]["portfolio_vs_factors"][component_id][factor_name] = float(correlation)
+        
+        # Factor-factor correlations
+        factor_names = list(self._data["time_series"]["factor_returns"].keys())
+        for i, factor1 in enumerate(factor_names):
+            if factor1 not in self._data["time_series"]["correlations"]["factor_correlations"]:
+                self._data["time_series"]["correlations"]["factor_correlations"][factor1] = {}
+            
+            for j, factor2 in enumerate(factor_names[i+1:], i+1):
+                returns1 = np.array(self._data["time_series"]["factor_returns"][factor1])
+                returns2 = np.array(self._data["time_series"]["factor_returns"][factor2])
+                
+                if len(returns1) > 1 and len(returns2) > 1 and len(returns1) == len(returns2):
+                    correlation = np.corrcoef(returns1, returns2)[0, 1]
+                    if not np.isnan(correlation):
+                        self._data["time_series"]["correlations"]["factor_correlations"][factor1][factor2] = float(correlation)
+    
+    def get_component_returns(
+        self,
+        component_id: str,
+        return_type: str = "portfolio"
+    ) -> List[float]:
+        """
+        Get return time series for a specific component.
+        
+        Parameters
+        ----------
+        component_id : str
+            ID of the component
+        return_type : str, default "portfolio"
+            Type of returns ("portfolio", "benchmark", "active")
+            
+        Returns
+        -------
+        list of float
+            Time series of returns
+        """
+        if return_type == "portfolio":
+            return self._data["time_series"]["portfolio_returns"].get(component_id, [])
+        elif return_type == "benchmark":
+            return self._data["time_series"]["benchmark_returns"].get(component_id, [])
+        elif return_type == "active":
+            return self._data["time_series"]["active_returns"].get(component_id, [])
+        else:
+            return []
+    
+    def get_factor_returns(self, factor_name: str) -> List[float]:
+        """
+        Get return time series for a specific factor.
+        
+        Parameters
+        ----------
+        factor_name : str
+            Name of the factor
+            
+        Returns
+        -------
+        list of float
+            Time series of factor returns
+        """
+        return self._data["time_series"]["factor_returns"].get(factor_name, [])
+    
+    def get_time_series_summary(self) -> Dict[str, Any]:
+        """Get a summary of all time series data."""
+        ts_data = self._data["time_series"]
+        
+        return {
+            "metadata": ts_data["metadata"].copy(),
+            "component_counts": {
+                "portfolio_components": len(ts_data["portfolio_returns"]),
+                "benchmark_components": len(ts_data["benchmark_returns"]),
+                "active_components": len(ts_data["active_returns"]),
+                "factors": len(ts_data["factor_returns"])
+            },
+            "date_info": {
+                "total_dates": len(ts_data["dates"]),
+                "frequency": ts_data["frequency"],
+                "currency": ts_data["currency"]
+            },
+            "statistics_available": {
+                "portfolio": len(ts_data["statistics"]["portfolio"]),
+                "benchmark": len(ts_data["statistics"]["benchmark"]),
+                "active": len(ts_data["statistics"]["active"]),
+                "factor": len(ts_data["statistics"]["factor"])
+            }
+        }
+    
     def set_factor_risk_contributions_matrix(self, matrix: Union[np.ndarray, Dict[str, Dict[str, float]]]) -> None:
         """
         Set factor risk contributions matrix (Asset × Factor).
@@ -834,6 +1442,287 @@ class RiskResultSchema:
                 "message": f"Active decomposition validation: {decomp_check['difference']:.6f} difference",
                 "components": decomp_check["components"]
             }
+    
+    def _validate_hierarchy_consistency(self, validation_results: Dict[str, Any]) -> None:
+        """Validate hierarchy structure consistency and relationships."""
+        
+        hierarchy_data = self._data["hierarchy"]
+        
+        # Check if hierarchy data exists
+        if not hierarchy_data["root_component"] and not hierarchy_data["component_relationships"]:
+            validation_results["hierarchy_consistency"] = {
+                "passes": True,
+                "message": "No hierarchy data to validate"
+            }
+            return
+        
+        root_component = hierarchy_data["root_component"]
+        component_relationships = hierarchy_data["component_relationships"]
+        component_metadata = hierarchy_data["component_metadata"]
+        adjacency_list = hierarchy_data["adjacency_list"]
+        
+        validation_issues = []
+        
+        # 1. Root component validation
+        if root_component:
+            if root_component not in component_relationships:
+                validation_issues.append(f"Root component '{root_component}' not found in relationships")
+            elif component_relationships[root_component].get("parent") is not None:
+                validation_issues.append(f"Root component '{root_component}' should not have a parent")
+        
+        # 2. Parent-child relationship consistency
+        for component_id, relations in component_relationships.items():
+            parent = relations.get("parent")
+            children = relations.get("children", [])
+            
+            # Validate parent relationship
+            if parent is not None:
+                if parent not in component_relationships:
+                    validation_issues.append(f"Component '{component_id}' has unknown parent '{parent}'")
+                elif component_id not in component_relationships[parent].get("children", []):
+                    validation_issues.append(f"Parent '{parent}' doesn't list '{component_id}' as child")
+            
+            # Validate children relationships
+            for child in children:
+                if child not in component_relationships:
+                    validation_issues.append(f"Component '{component_id}' has unknown child '{child}'")
+                elif component_relationships[child].get("parent") != component_id:
+                    validation_issues.append(f"Child '{child}' doesn't have '{component_id}' as parent")
+        
+        # 3. Adjacency list consistency
+        for parent_id, child_list in adjacency_list.items():
+            if parent_id in component_relationships:
+                expected_children = set(component_relationships[parent_id].get("children", []))
+                actual_children = set(child_list)
+                if expected_children != actual_children:
+                    validation_issues.append(
+                        f"Adjacency list mismatch for '{parent_id}': "
+                        f"expected {expected_children}, got {actual_children}"
+                    )
+        
+        # 4. Circular reference detection
+        visited = set()
+        rec_stack = set()
+        
+        def has_cycle(node):
+            if node in rec_stack:
+                return True
+            if node in visited:
+                return False
+            
+            visited.add(node)
+            rec_stack.add(node)
+            
+            for child in component_relationships.get(node, {}).get("children", []):
+                if has_cycle(child):
+                    return True
+            
+            rec_stack.remove(node)
+            return False
+        
+        # Check for cycles starting from all components
+        for component_id in component_relationships:
+            if component_id not in visited:
+                if has_cycle(component_id):
+                    validation_issues.append(f"Circular reference detected involving '{component_id}'")
+                    break
+        
+        # 5. Metadata consistency
+        for component_id in component_relationships:
+            if component_id not in component_metadata:
+                validation_issues.append(f"Missing metadata for component '{component_id}'")
+        
+        # 6. Leaf components validation
+        leaf_components = hierarchy_data.get("leaf_components", [])
+        actual_leaves = [
+            comp_id for comp_id, relations in component_relationships.items()
+            if not relations.get("children", [])
+        ]
+        
+        if set(leaf_components) != set(actual_leaves):
+            validation_issues.append(
+                f"Leaf components mismatch: expected {set(actual_leaves)}, got {set(leaf_components)}"
+            )
+        
+        # 7. Path mappings validation
+        path_mappings = hierarchy_data.get("path_mappings", {})
+        for component_id in component_relationships:
+            if component_id in path_mappings:
+                expected_path = component_id  # For hierarchical IDs, path should match ID
+                actual_path = path_mappings[component_id]
+                # Basic validation - paths should be consistent with component structure
+                if not actual_path.endswith(component_id.split('/')[-1]):
+                    validation_issues.append(
+                        f"Path mapping inconsistent for '{component_id}': {actual_path}"
+                    )
+        
+        # Compile validation results
+        validation_results["hierarchy_consistency"] = {
+            "passes": len(validation_issues) == 0,
+            "issues": validation_issues,
+            "component_count": len(component_relationships),
+            "leaf_count": len(actual_leaves),
+            "root_component": root_component,
+            "message": (
+                "Hierarchy validation passed" if len(validation_issues) == 0 
+                else f"Hierarchy validation failed with {len(validation_issues)} issues"
+            )
+        }
+    
+    def _validate_time_series_consistency(self, validation_results: Dict[str, Any]) -> None:
+        """Validate time series data consistency and completeness."""
+        
+        ts_data = self._data["time_series"]
+        validation_issues = []
+        
+        # Check if time series data exists
+        portfolio_returns = ts_data["portfolio_returns"]
+        benchmark_returns = ts_data["benchmark_returns"]
+        active_returns = ts_data["active_returns"]
+        factor_returns = ts_data["factor_returns"]
+        dates = ts_data["dates"]
+        
+        total_components = len(portfolio_returns) + len(benchmark_returns) + len(active_returns)
+        total_factors = len(factor_returns)
+        
+        if total_components == 0 and total_factors == 0:
+            validation_results["time_series_consistency"] = {
+                "passes": True,
+                "message": "No time series data to validate"
+            }
+            return
+        
+        # 1. Date consistency validation
+        expected_periods = len(dates) if dates else None
+        
+        # Check portfolio returns length consistency
+        for component_id, returns in portfolio_returns.items():
+            if expected_periods and len(returns) != expected_periods:
+                validation_issues.append(
+                    f"Portfolio returns for '{component_id}': {len(returns)} periods, expected {expected_periods}"
+                )
+        
+        # Check benchmark returns length consistency
+        for component_id, returns in benchmark_returns.items():
+            if expected_periods and len(returns) != expected_periods:
+                validation_issues.append(
+                    f"Benchmark returns for '{component_id}': {len(returns)} periods, expected {expected_periods}"
+                )
+        
+        # Check active returns length consistency
+        for component_id, returns in active_returns.items():
+            if expected_periods and len(returns) != expected_periods:
+                validation_issues.append(
+                    f"Active returns for '{component_id}': {len(returns)} periods, expected {expected_periods}"
+                )
+        
+        # Check factor returns length consistency
+        for factor_name, returns in factor_returns.items():
+            if expected_periods and len(returns) != expected_periods:
+                validation_issues.append(
+                    f"Factor returns for '{factor_name}': {len(returns)} periods, expected {expected_periods}"
+                )
+        
+        # 2. Active returns calculation consistency
+        active_calculation_issues = 0
+        for component_id in active_returns:
+            if component_id in portfolio_returns and component_id in benchmark_returns:
+                port_returns = portfolio_returns[component_id]
+                bench_returns = benchmark_returns[component_id]
+                calculated_active = active_returns[component_id]
+                
+                if len(port_returns) == len(bench_returns) == len(calculated_active):
+                    # Check if active returns approximately equal portfolio - benchmark
+                    for i, (p, b, a) in enumerate(zip(port_returns, bench_returns, calculated_active)):
+                        expected_active = p - b
+                        if abs(a - expected_active) > 1e-8:
+                            validation_issues.append(
+                                f"Active return calculation mismatch for '{component_id}' at period {i}: "
+                                f"expected {expected_active:.8f}, got {a:.8f}"
+                            )
+                            active_calculation_issues += 1
+                            break  # Only report first mismatch per component
+        
+        # 3. Statistics consistency validation
+        stats_issues = 0
+        for return_type in ["portfolio", "benchmark", "active", "factor"]:
+            if return_type == "factor":
+                returns_data = factor_returns
+                stats_data = ts_data["statistics"]["factor"]
+            else:
+                if return_type == "portfolio":
+                    returns_data = portfolio_returns
+                elif return_type == "benchmark":
+                    returns_data = benchmark_returns
+                else:  # active
+                    returns_data = active_returns
+                stats_data = ts_data["statistics"][return_type]
+            
+            # Check that every component/factor with returns has statistics
+            for component_id in returns_data:
+                if component_id not in stats_data:
+                    validation_issues.append(f"Missing statistics for {return_type} '{component_id}'")
+                    stats_issues += 1
+            
+            # Check that statistics are consistent with returns
+            for component_id, stats in stats_data.items():
+                if component_id in returns_data:
+                    returns_list = returns_data[component_id]
+                    if len(returns_list) != stats.get("total_periods", 0):
+                        validation_issues.append(
+                            f"Statistics period count mismatch for {return_type} '{component_id}': "
+                            f"returns {len(returns_list)}, stats {stats.get('total_periods', 0)}"
+                        )
+                        stats_issues += 1
+        
+        # 4. Hierarchy consistency for time series
+        hierarchy_data = self._data["hierarchy"]
+        if hierarchy_data.get("component_relationships"):
+            # Check that hierarchical components have consistent time series data
+            for component_id in hierarchy_data["component_relationships"]:
+                # At minimum, components should have either portfolio or benchmark returns
+                has_portfolio = component_id in portfolio_returns
+                has_benchmark = component_id in benchmark_returns
+                
+                if not has_portfolio and not has_benchmark:
+                    # This might be acceptable for intermediate nodes, so just note it
+                    pass
+        
+        # 5. Missing data validation
+        missing_data_issues = 0
+        for return_type, returns_data in [
+            ("portfolio", portfolio_returns), 
+            ("benchmark", benchmark_returns),
+            ("active", active_returns)
+        ]:
+            for component_id, returns in returns_data.items():
+                nan_count = sum(1 for r in returns if r is None or (isinstance(r, float) and np.isnan(r)))
+                if nan_count > 0:
+                    missing_data_issues += 1
+                    validation_issues.append(
+                        f"Missing data in {return_type} returns for '{component_id}': {nan_count} NaN values"
+                    )
+        
+        # Compile validation results
+        total_issues = len(validation_issues)
+        
+        validation_results["time_series_consistency"] = {
+            "passes": total_issues == 0,
+            "issues": validation_issues if total_issues <= 10 else validation_issues[:10] + [f"... and {total_issues - 10} more issues"],
+            "summary": {
+                "total_components": total_components,
+                "total_factors": total_factors,
+                "date_periods": expected_periods or 0,
+                "active_calculation_issues": active_calculation_issues,
+                "statistics_issues": stats_issues,
+                "missing_data_issues": missing_data_issues,
+                "total_issues": total_issues
+            },
+            "message": (
+                "Time series validation passed" if total_issues == 0 
+                else f"Time series validation failed with {total_issues} issues"
+            )
+        }
     
     def validate_schema(self) -> Dict[str, Any]:
         """
@@ -990,6 +1879,12 @@ class RiskResultSchema:
         
         # Multi-lens validation
         self._validate_multi_lens_consistency(validation_results)
+        
+        # Hierarchy validation
+        self._validate_hierarchy_consistency(validation_results)
+        
+        # Time series validation
+        self._validate_time_series_consistency(validation_results)
         
         # Overall validation
         all_passed = all(result.get("passes", False) for result in validation_results.values())
