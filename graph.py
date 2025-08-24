@@ -38,6 +38,11 @@ class PortfolioGraph:
         # Metric storage
         self.metric_store = metric_store or InMemoryMetricStore()
     
+    @property
+    def adjacency_list(self) -> Dict[str, List[str]]:
+        """Get adjacency list representation of parent-child relationships."""
+        return {parent: list(children) for parent, children in self._adjacency_list.items()}
+    
     def add_component(self, component: PortfolioComponent) -> bool:
         """Add a component to the graph"""
         if component.component_id in self.components:

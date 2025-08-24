@@ -12,7 +12,7 @@ This module supports:
 - Seamless integration with decision attribution framework
 """
 
-from typing import Dict, Optional, Any, TYPE_CHECKING
+from typing import Dict, Optional, Any, TYPE_CHECKING, List
 import pandas as pd
 import logging
 
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from .visitors import FactorRiskDecompositionVisitor
     from spark.risk.estimator import LinearRiskModelEstimator
     from spark.risk.schema import RiskResultSchema
+    from spark.risk.strategies import RiskAnalysisStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,13 @@ class PortfolioRiskAnalyzer:
     >>> print(f"Total risk: {summary['portfolio_volatility']:.4f}")
     """
     
-    def __init__(self, portfolio_graph: 'PortfolioGraph'):
+    def __init__(self, 
+                 portfolio_graph: 'PortfolioGraph',
+                 strategy: Optional['RiskAnalysisStrategy'] = None,
+                 estimator: Optional['LinearRiskModelEstimator'] = None):
         self.portfolio_graph = portfolio_graph
+        self.strategy = strategy  # Will be set to default if None when needed
+        self.estimator = estimator  # Will be set to default if None when needed
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
     
     @property
@@ -115,9 +121,16 @@ class PortfolioRiskAnalyzer:
         # Create weight service for optimized weight calculations
         weight_service = self.portfolio_graph.create_weight_service()
         
+        # Use injected estimator if available, otherwise use provided or default
+        final_estimator = estimator or self.estimator
+        if final_estimator is None:
+            # Import default estimator here to avoid circular imports
+            from spark.risk.estimator import LinearRiskModelEstimator
+            final_estimator = LinearRiskModelEstimator()
+            
         visitor = FactorRiskDecompositionVisitor(
             factor_returns=factor_returns,
-            estimator=estimator,
+            estimator=final_estimator,
             metric_store=self.portfolio_graph.metric_store,
             portfolio_returns_metric=portfolio_returns_metric,
             benchmark_returns_metric=benchmark_returns_metric,
@@ -139,13 +152,15 @@ class PortfolioRiskAnalyzer:
         root_component_id: str,
         factor_returns: pd.DataFrame,
         estimator: Optional['LinearRiskModelEstimator'] = None,
+        include_time_series: bool = False,
         **kwargs
     ) -> 'RiskResultSchema':
         """
         Get a standardized risk summary for hierarchical portfolio analysis.
         
         Returns a unified schema with key risk metrics extracted from the
-        FactorRiskDecompositionVisitor results.
+        FactorRiskDecompositionVisitor results. Can optionally include
+        comprehensive time series and hierarchy data.
         
         Parameters
         ----------
@@ -155,6 +170,9 @@ class PortfolioRiskAnalyzer:
             Factor returns data
         estimator : LinearRiskModelEstimator, optional
             Risk model estimator
+        include_time_series : bool, default False
+            If True, creates comprehensive schema with time series and hierarchy data
+            If False, creates basic schema with risk decomposition only (backward compatible)
         **kwargs
             Additional arguments
             
@@ -163,14 +181,24 @@ class PortfolioRiskAnalyzer:
         RiskResultSchema
             Standardized risk summary in unified schema format
         """
-        visitor = self.decompose_factor_risk(
-            root_component_id=root_component_id,
-            factor_returns=factor_returns, 
-            estimator=estimator,
-            **kwargs
-        )
-        
-        return self._extract_hierarchical_schema(visitor)
+        if include_time_series:
+            # Use comprehensive approach
+            return self.get_comprehensive_schema(
+                root_component_id=root_component_id,
+                factor_returns=factor_returns,
+                estimator=estimator,
+                **kwargs
+            )
+        else:
+            # Use original approach for backward compatibility
+            visitor = self.decompose_factor_risk(
+                root_component_id=root_component_id,
+                factor_returns=factor_returns, 
+                estimator=estimator,
+                **kwargs
+            )
+            
+            return self._extract_hierarchical_schema(visitor)
     
     def _extract_hierarchical_schema(self, visitor: 'FactorRiskDecompositionVisitor') -> 'RiskResultSchema':
         """
@@ -265,6 +293,177 @@ class PortfolioRiskAnalyzer:
             })
             
             return schema
+    
+    def _extract_portfolio_returns(self) -> Dict[str, pd.Series]:
+        """Extract portfolio returns for all components from metric store."""
+        portfolio_returns = {}
+        metric_store = self.portfolio_graph.metric_store
+        
+        for component_id in self.portfolio_graph.components.keys():
+            # Try different metric names for portfolio returns
+            for metric_name in ['portfolio_return', 'port_ret', 'returns']:
+                metric = metric_store.get_metric(component_id, metric_name)
+                if metric and hasattr(metric, 'value'):
+                    returns_data = metric.value()
+                    if isinstance(returns_data, pd.Series):
+                        portfolio_returns[component_id] = returns_data
+                        break
+                    elif hasattr(returns_data, 'values') and len(returns_data.values) > 0:
+                        # Create series from array data if available
+                        portfolio_returns[component_id] = pd.Series(returns_data.values)
+                        break
+                        
+        return portfolio_returns
+    
+    def _extract_benchmark_returns(self) -> Dict[str, pd.Series]:
+        """Extract benchmark returns for all components from metric store."""
+        benchmark_returns = {}
+        metric_store = self.portfolio_graph.metric_store
+        
+        for component_id in self.portfolio_graph.components.keys():
+            # Try different metric names for benchmark returns
+            for metric_name in ['benchmark_return', 'bench_ret', 'benchmark_returns']:
+                metric = metric_store.get_metric(component_id, metric_name)
+                if metric and hasattr(metric, 'value'):
+                    returns_data = metric.value()
+                    if isinstance(returns_data, pd.Series):
+                        benchmark_returns[component_id] = returns_data
+                        break
+                    elif hasattr(returns_data, 'values') and len(returns_data.values) > 0:
+                        # Create series from array data if available
+                        benchmark_returns[component_id] = pd.Series(returns_data.values)
+                        break
+                        
+        return benchmark_returns
+    
+    def _extract_component_relationships(self) -> Dict[str, Dict[str, Any]]:
+        """Extract component parent-child relationships from portfolio graph."""
+        relationships = {}
+        adjacency_list = self.portfolio_graph.adjacency_list
+        
+        for comp_id in self.portfolio_graph.components.keys():
+            # Find parent
+            parent = None
+            for parent_id, children in adjacency_list.items():
+                if comp_id in children:
+                    parent = parent_id
+                    break
+            
+            # Get children
+            children = adjacency_list.get(comp_id, [])
+            
+            relationships[comp_id] = {
+                "parent": parent,
+                "children": children
+            }
+            
+        return relationships
+    
+    def _extract_component_metadata(self) -> Dict[str, Dict[str, Any]]:
+        """Extract component metadata from portfolio graph."""
+        metadata = {}
+        
+        for comp_id, component in self.portfolio_graph.components.items():
+            metadata[comp_id] = {
+                "component_id": comp_id,
+                "type": "leaf" if component.is_leaf() else "node",
+                "level": len(comp_id.split('/')) - 1 if '/' in comp_id else 0,
+                "path": comp_id
+            }
+            
+        return metadata
+    
+    def get_comprehensive_schema(
+        self,
+        root_component_id: str,
+        factor_returns: pd.DataFrame,
+        estimator: Optional['LinearRiskModelEstimator'] = None,
+        **kwargs
+    ) -> 'RiskResultSchema':
+        """
+        Create comprehensive risk schema with all available data.
+        
+        This method combines data from all sources available to the analyzer:
+        - Risk decomposition results from visitor
+        - Time series data from portfolio graph metric store
+        - Hierarchy structure from portfolio graph
+        - Factor returns from input
+        
+        Parameters
+        ----------
+        root_component_id : str
+            Component ID for analysis root
+        factor_returns : pd.DataFrame
+            Factor returns data
+        estimator : LinearRiskModelEstimator, optional
+            Risk model estimator override
+        **kwargs
+            Additional arguments passed to decomposition
+            
+        Returns
+        -------
+        RiskResultSchema
+            Comprehensive schema with risk results, time series, and hierarchy data
+        """
+        self.logger.info(f"Creating comprehensive schema for '{root_component_id}'")
+        
+        # 1. Run factor risk decomposition
+        visitor = self.decompose_factor_risk(
+            root_component_id=root_component_id,
+            factor_returns=factor_returns,
+            estimator=estimator,
+            **kwargs
+        )
+        
+        # 2. Extract time series data from portfolio graph
+        portfolio_returns = self._extract_portfolio_returns()
+        benchmark_returns = self._extract_benchmark_returns()
+        
+        # 3. Convert factor returns to dictionary
+        factor_returns_dict = {
+            factor_name: factor_returns[factor_name] 
+            for factor_name in factor_returns.columns
+        }
+        
+        # 4. Create schema using decoupled factory method
+        from spark.risk.schema_factory import RiskSchemaFactory
+        
+        schema = RiskSchemaFactory.from_visitor_results_with_time_series(
+            visitor=visitor,
+            component_id=root_component_id,
+            portfolio_returns=portfolio_returns,
+            benchmark_returns=benchmark_returns,
+            factor_returns=factor_returns_dict,
+            dates=factor_returns.index.tolist(),
+            analysis_type="hierarchical"
+        )
+        
+        # 5. Add hierarchy data from portfolio graph
+        try:
+            component_relationships = self._extract_component_relationships()
+            component_metadata = self._extract_component_metadata()
+            
+            schema.set_hierarchy_structure(
+                root_component=root_component_id,
+                component_relationships=component_relationships,
+                component_metadata=component_metadata,
+                adjacency_list=self.portfolio_graph.adjacency_list
+            )
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to set hierarchy structure: {e}")
+            schema.add_context_info('hierarchy_extraction_error', str(e))
+        
+        # 6. Add analyzer context information
+        schema.add_context_info('analyzer_type', self.__class__.__name__)
+        schema.add_context_info('portfolio_components_count', len(self.portfolio_graph.components))
+        schema.add_context_info('time_series_portfolio_components', len(portfolio_returns))
+        schema.add_context_info('time_series_benchmark_components', len(benchmark_returns))
+        schema.add_context_info('extraction_method', 'comprehensive_analyzer')
+        
+        self.logger.info(f"Comprehensive schema created with {len(portfolio_returns)} portfolio and {len(benchmark_returns)} benchmark time series")
+        
+        return schema
     
     def __repr__(self) -> str:
         """String representation of the analyzer"""
