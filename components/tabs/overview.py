@@ -54,9 +54,18 @@ def render_overview_tab(data_loader, sidebar_state):
     st.divider()
     st.subheader("📈 Summary Insights")
     
-    # Get some summary metrics for display
-    portfolio_metrics = data_loader.get_core_metrics("portfolio", sidebar_state.selected_node)
-    active_metrics = data_loader.get_core_metrics("active", sidebar_state.selected_node)
+    # Get component-specific summary metrics 
+    # Try hierarchical data first, fallback to legacy structure
+    hierarchical_components = data_loader.get_available_hierarchical_components()
+    
+    if sidebar_state.selected_node in hierarchical_components:
+        # Use new hierarchical data access
+        portfolio_metrics = data_loader.get_component_risk_summary(sidebar_state.selected_node, "portfolio")
+        active_metrics = data_loader.get_component_risk_summary(sidebar_state.selected_node, "active")
+    else:
+        # Fallback to legacy data access
+        portfolio_metrics = data_loader.get_core_metrics("portfolio", sidebar_state.selected_node)
+        active_metrics = data_loader.get_core_metrics("active", sidebar_state.selected_node)
     
     insights = []
     

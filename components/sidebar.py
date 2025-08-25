@@ -27,26 +27,82 @@ def render_sidebar(data_loader) -> SidebarState:
             key="lens_selector"
         )
         
-        # Node selector (tree-aware)
-        st.subheader("🏗️ Node Selector")
-        component_names = data_loader.get_component_names()
+        # Enhanced hierarchical node selector
+        st.subheader("🏗️ Hierarchical Navigator")
+        
+        # Get all available hierarchical components
+        hierarchical_components = data_loader.get_available_hierarchical_components()
+        all_component_names = data_loader.get_component_names()
+        
+        # Use hierarchical components if available, fallback to regular components
+        available_components = hierarchical_components if hierarchical_components else all_component_names
         
         # Default to TOTAL if available
-        default_node = "TOTAL" if "TOTAL" in component_names else (component_names[0] if component_names else "TOTAL")
+        default_node = "TOTAL" if "TOTAL" in available_components else (available_components[0] if available_components else "TOTAL")
         
         selected_node = st.selectbox(
             "Navigate hierarchy",
-            options=component_names if component_names else ["TOTAL"],
-            index=component_names.index(default_node) if default_node in component_names else 0,
+            options=available_components if available_components else ["TOTAL"],
+            index=available_components.index(default_node) if default_node in available_components else 0,
             key="node_selector"
         )
         
-        # Show component metadata if available
+        # Show hierarchy path breadcrumbs
+        if selected_node and selected_node in hierarchical_components:
+            hierarchy_path = data_loader.get_component_hierarchy_path(selected_node)
+            if hierarchy_path and len(hierarchy_path) > 1:
+                breadcrumb = " → ".join(hierarchy_path)
+                st.caption(f"📍 Path: {breadcrumb}")
+        
+        # Show component metadata
         hierarchy = data_loader.get_hierarchy_info()
         component_metadata = hierarchy.get('component_metadata', {})
         if selected_node in component_metadata:
             metadata = component_metadata[selected_node]
             st.caption(f"Type: {metadata.get('type', 'N/A')} | Level: {metadata.get('level', 'N/A')}")
+        
+        # Navigation controls
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if data_loader.can_drill_up(selected_node):
+                parent_id = data_loader.get_component_parent(selected_node)
+                if st.button(f"⬆️ Up to {parent_id}", key="drill_up", help="Navigate to parent component"):
+                    st.session_state.node_selector = parent_id
+                    st.rerun()
+        
+        with col2:
+            drill_down_options = data_loader.get_drilldown_options(selected_node)
+            if drill_down_options:
+                st.caption(f"⬇️ Can drill down to {len(drill_down_options)} child{'ren' if len(drill_down_options) > 1 else ''}")
+        
+        # Show drill-down options if available
+        if drill_down_options:
+            st.caption("**Children:**")
+            drill_down_cols = st.columns(min(3, len(drill_down_options)))
+            for i, child_id in enumerate(drill_down_options[:3]):  # Show first 3
+                with drill_down_cols[i]:
+                    if st.button(f"📂 {child_id}", key=f"drill_down_{child_id}", help=f"Navigate to {child_id}"):
+                        st.session_state.node_selector = child_id
+                        st.rerun()
+            
+            if len(drill_down_options) > 3:
+                st.caption(f"... and {len(drill_down_options) - 3} more")
+        
+        # Show component-specific lens availability
+        if selected_node in hierarchical_components:
+            available_lenses = data_loader.get_component_lens_availability(selected_node)
+            if available_lenses:
+                st.caption(f"📊 Available lenses: {', '.join(available_lenses)}")
+                
+                # Validation indicator
+                current_lens = lens  # from the lens selector above
+                if current_lens in available_lenses:
+                    validation = data_loader.get_component_validation_status(selected_node, current_lens)
+                    if validation.get('euler_identity_check', False):
+                        st.success("✅ Component validated")
+                    else:
+                        st.warning("⚠️ Validation issues")
         
         st.divider()
         
@@ -142,6 +198,22 @@ def render_sidebar(data_loader) -> SidebarState:
             st.success("All checks passed")
         else:
             st.warning("Some checks failed")
+        
+        # Hierarchical data summary (if available)
+        hierarchical_summary = data_loader.get_hierarchical_data_summary()
+        if hierarchical_summary.get('total_components', 0) > 0:
+            st.divider()
+            st.subheader("🏗️ Data Summary")
+            st.text(f"Components: {hierarchical_summary['total_components']}")
+            st.text(f"With matrices: {hierarchical_summary['components_with_matrices']}")
+            st.text(f"Schema: v{hierarchical_summary['schema_version']}")
+            
+            # Show which components have how many lenses
+            lens_counts = hierarchical_summary.get('component_lens_counts', {})
+            if lens_counts:
+                max_lenses = max(lens_counts.values()) if lens_counts else 0
+                components_full = sum(1 for count in lens_counts.values() if count >= 3)
+                st.text(f"Full analysis: {components_full}/{len(lens_counts)}")
     
     return SidebarState(
         lens=lens,

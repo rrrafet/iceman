@@ -42,9 +42,17 @@ def render_kpi_cards_portfolio_active(
 ) -> None:
     """Render side-by-side KPI cards for Portfolio and Active"""
     
-    # Get data for both lenses
-    portfolio_metrics = data_loader.get_core_metrics("portfolio", sidebar_state.selected_node)
-    active_metrics = data_loader.get_core_metrics("active", sidebar_state.selected_node)
+    # Get data for both lenses - use hierarchical data if available
+    hierarchical_components = data_loader.get_available_hierarchical_components()
+    
+    if sidebar_state.selected_node in hierarchical_components:
+        # Use hierarchical component data
+        portfolio_metrics = data_loader.get_component_risk_summary(sidebar_state.selected_node, "portfolio")
+        active_metrics = data_loader.get_component_risk_summary(sidebar_state.selected_node, "active")
+    else:
+        # Fallback to legacy data access
+        portfolio_metrics = data_loader.get_core_metrics("portfolio", sidebar_state.selected_node)
+        active_metrics = data_loader.get_core_metrics("active", sidebar_state.selected_node)
     
     st.subheader("📊 Key Performance Indicators")
     

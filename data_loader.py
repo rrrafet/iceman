@@ -57,12 +57,31 @@ class DataLoader:
     def _load_data(self):
         """
         Load data using the best available method:
-        1. RiskAnalysisService (if available)
-        2. Static file loading
-        3. Mock data fallback
+        1. Schema cache (schema_TOTAL.pkl)
+        2. RiskAnalysisService (if available)
+        3. Static file loading
+        4. Mock data fallback
         """
         try:
-            # Try RiskAnalysisService first
+            # First, try to load from schema cache
+            if self._risk_service:
+                try:
+                    schema_obj = self._risk_service.load_schema_from_cache("TOTAL")
+                    if schema_obj is not None:
+                        # Extract data from schema object
+                        if hasattr(schema_obj, 'data'):
+                            self._data = self._risk_service._serialize_schema_data(schema_obj.data)
+                            print("✓ Data loaded from schema_TOTAL.pkl cache")
+                            return
+                        elif hasattr(schema_obj, '__dict__'):
+                            # Try to serialize the schema object itself
+                            self._data = self._risk_service._serialize_schema_data(schema_obj.__dict__)
+                            print("✓ Data loaded from schema_TOTAL.pkl cache (object dict)")
+                            return
+                except Exception as e:
+                    print(f"Warning: Failed to load schema_TOTAL.pkl ({e}). Trying RiskAnalysisService.")
+            
+            # Try RiskAnalysisService for fresh data generation
             if self._risk_service:
                 try:
                     self._data = self._risk_service.get_risk_data("TOTAL")
@@ -258,6 +277,24 @@ class DataLoader:
         """Check if RiskAnalysisService is available."""
         return self._risk_service is not None
     
+    def get_data_source_info(self) -> Dict[str, Any]:
+        """
+        Get information about the current data source and available cache files.
+        
+        Returns:
+            Dictionary with data source information
+        """
+        info = {
+            "risk_service_available": self.has_risk_service(),
+            "data_loaded": self._data is not None,
+            "cache_info": {}
+        }
+        
+        if self._risk_service:
+            info["cache_info"] = self._risk_service.get_cache_info()
+        
+        return info
+    
     def set_portfolio_components(self, portfolio_graph: object, factor_returns: object):
         """
         Update portfolio components for dynamic risk analysis.
@@ -277,6 +314,232 @@ class DataLoader:
             )
             print("✓ Portfolio components updated, risk service reinitialized")
     
+    # Component-aware hierarchical data access methods
+    
+    def get_component_full_data(self, component_id: str, lens: str) -> Dict[str, Any]:
+        """
+        Get complete risk decomposition data for a specific component and lens.
+        
+        Args:
+            component_id: Component identifier (e.g., 'TOTAL', 'equity/us', etc.)
+            lens: Lens type ('portfolio', 'benchmark', or 'active')
+            
+        Returns:
+            Complete decomposer results for the component and lens
+        """
+        hierarchical_data = self._data.get('hierarchical_risk_data', {})
+        component_data = hierarchical_data.get(component_id, {})
+        return component_data.get(lens, {})
+    
+    def get_component_risk_summary(self, component_id: str, lens: str) -> Dict[str, float]:
+        """
+        Get risk summary metrics for a specific component and lens.
+        
+        Args:
+            component_id: Component identifier 
+            lens: Lens type ('portfolio', 'benchmark', or 'active')
+            
+        Returns:
+            Dictionary with core risk metrics
+        """
+        component_data = self.get_component_full_data(component_id, lens)
+        decomposer_results = component_data.get('decomposer_results', {})
+        
+        return {
+            'total_risk': decomposer_results.get('total_risk', 0.0),
+            'factor_risk_contribution': decomposer_results.get('factor_risk_contribution', 0.0),
+            'specific_risk_contribution': decomposer_results.get('specific_risk_contribution', 0.0),
+            'factor_risk_percentage': decomposer_results.get('factor_risk_percentage', 0.0),
+            'specific_risk_percentage': decomposer_results.get('specific_risk_percentage', 0.0)
+        }
+    
+    def get_component_matrices_data(self, component_id: str, matrix_type: str, lens: str = 'portfolio') -> Dict[str, Any]:
+        """
+        Get matrix data for a specific component.
+        
+        Args:
+            component_id: Component identifier
+            matrix_type: Type of matrix ('beta_matrix', 'weighted_beta_matrix', etc.)
+            lens: Lens type ('portfolio', 'benchmark', or 'active')
+            
+        Returns:
+            Matrix data dictionary
+        """
+        hierarchical_matrices = self._data.get('hierarchical_matrices', {})
+        component_matrices = hierarchical_matrices.get(component_id, {})
+        lens_matrices = component_matrices.get(lens, {})
+        return lens_matrices.get(matrix_type, {})
+    
+    def get_component_factor_contributions(self, component_id: str, lens: str) -> Dict[str, float]:
+        """
+        Get factor contributions for a specific component and lens.
+        
+        Args:
+            component_id: Component identifier
+            lens: Lens type
+            
+        Returns:
+            Dictionary of factor contributions
+        """
+        component_data = self.get_component_full_data(component_id, lens)
+        decomposer_results = component_data.get('decomposer_results', {})
+        return decomposer_results.get('factor_contributions', {})
+    
+    def get_component_asset_contributions(self, component_id: str, lens: str) -> Dict[str, float]:
+        """
+        Get asset contributions for a specific component and lens.
+        
+        Args:
+            component_id: Component identifier
+            lens: Lens type
+            
+        Returns:
+            Dictionary of asset contributions  
+        """
+        component_data = self.get_component_full_data(component_id, lens)
+        decomposer_results = component_data.get('decomposer_results', {})
+        return decomposer_results.get('asset_contributions', {})
+    
+    # Hierarchical navigation methods
+    
+    def get_component_hierarchy_path(self, component_id: str) -> List[str]:
+        """
+        Get hierarchy path from root to component.
+        
+        Args:
+            component_id: Component identifier
+            
+        Returns:
+            List of component IDs from root to component
+        """
+        path = []
+        current = component_id
+        hierarchy = self.get_hierarchy_info()
+        component_relationships = hierarchy.get('component_relationships', {})
+        
+        while current:
+            path.append(current)
+            component_info = component_relationships.get(current, {})
+            current = component_info.get('parent')
+        
+        return list(reversed(path))  # Root to component order
+    
+    def get_drilldown_options(self, component_id: str) -> List[str]:
+        """
+        Get child components that can be drilled down into.
+        
+        Args:
+            component_id: Component identifier
+            
+        Returns:
+            List of child component IDs
+        """
+        hierarchy = self.get_hierarchy_info()
+        adjacency_list = hierarchy.get('adjacency_list', {})
+        return adjacency_list.get(component_id, [])
+    
+    def can_drill_down(self, component_id: str) -> bool:
+        """
+        Check if component has children to drill down into.
+        
+        Args:
+            component_id: Component identifier
+            
+        Returns:
+            True if component has children
+        """
+        return len(self.get_drilldown_options(component_id)) > 0
+    
+    def can_drill_up(self, component_id: str) -> bool:
+        """
+        Check if component has parent to drill up to.
+        
+        Args:
+            component_id: Component identifier
+            
+        Returns:
+            True if component has parent
+        """
+        hierarchy = self.get_hierarchy_info()
+        component_relationships = hierarchy.get('component_relationships', {})
+        component_info = component_relationships.get(component_id, {})
+        return component_info.get('parent') is not None
+    
+    def get_component_parent(self, component_id: str) -> Optional[str]:
+        """
+        Get parent component ID.
+        
+        Args:
+            component_id: Component identifier
+            
+        Returns:
+            Parent component ID or None if root
+        """
+        hierarchy = self.get_hierarchy_info()
+        component_relationships = hierarchy.get('component_relationships', {})
+        component_info = component_relationships.get(component_id, {})
+        return component_info.get('parent')
+    
+    def get_available_hierarchical_components(self) -> List[str]:
+        """
+        Get list of all components with hierarchical risk data.
+        
+        Returns:
+            List of component IDs with risk decomposition data
+        """
+        hierarchical_data = self._data.get('hierarchical_risk_data', {})
+        return list(hierarchical_data.keys())
+    
+    def get_component_lens_availability(self, component_id: str) -> List[str]:
+        """
+        Get available lenses for a specific component.
+        
+        Args:
+            component_id: Component identifier
+            
+        Returns:
+            List of available lens types for this component
+        """
+        hierarchical_data = self._data.get('hierarchical_risk_data', {})
+        component_data = hierarchical_data.get(component_id, {})
+        return list(component_data.keys())
+    
+    def get_component_validation_status(self, component_id: str, lens: str) -> Dict[str, Any]:
+        """
+        Get validation status for a specific component and lens.
+        
+        Args:
+            component_id: Component identifier
+            lens: Lens type
+            
+        Returns:
+            Validation status dictionary
+        """
+        component_data = self.get_component_full_data(component_id, lens)
+        return component_data.get('validation', {})
+    
+    def get_hierarchical_data_summary(self) -> Dict[str, Any]:
+        """
+        Get summary of available hierarchical risk data.
+        
+        Returns:
+            Summary of components and lenses available
+        """
+        hierarchical_data = self._data.get('hierarchical_risk_data', {})
+        hierarchical_matrices = self._data.get('hierarchical_matrices', {})
+        
+        component_lens_counts = {}
+        for component_id, component_data in hierarchical_data.items():
+            component_lens_counts[component_id] = len(component_data.keys())
+        
+        return {
+            'total_components': len(hierarchical_data),
+            'components_with_matrices': len(hierarchical_matrices),
+            'component_lens_counts': component_lens_counts,
+            'available_components': list(hierarchical_data.keys()),
+            'schema_version': self._data.get('metadata', {}).get('schema_version', 'unknown')
+        }
+    
     def _create_mock_data(self) -> Dict[str, Any]:
         """Create mock data for development when real data is not available"""
         return {
@@ -285,11 +548,108 @@ class DataLoader:
                 "timestamp": "2025-08-24T20:48:18.867862",
                 "data_frequency": "D",
                 "annualized": True,
-                "schema_version": "2.0"
+                "schema_version": "3.0"
             },
             "identifiers": {
                 "factor_names": ["Market", "Size", "Value", "Momentum", "Quality", "Low_Vol"],
                 "component_names": ["TOTAL", "CA", "OVL", "IG", "EQLIKE"]
+            },
+            
+            # Complete hierarchical risk database
+            "hierarchical_risk_data": {
+                "TOTAL": {
+                    "portfolio": {
+                        "decomposer_results": {
+                            "total_risk": 0.0250,
+                            "factor_risk_contribution": 0.0180,
+                            "specific_risk_contribution": 0.0070,
+                            "factor_risk_percentage": 72.0,
+                            "specific_risk_percentage": 28.0,
+                            "factor_contributions": {
+                                "Market": 100.0, "Size": 50.0, "Value": 30.0, "Momentum": 20.0
+                            },
+                            "asset_contributions": {
+                                "CA": 120.0, "OVL": 80.0, "IG": 60.0, "EQLIKE": 40.0
+                            },
+                            "factor_loadings_matrix": {},
+                            "weighted_betas": {},
+                            "covariance_matrix": [],
+                            "correlation_matrix": []
+                        },
+                        "validation": {
+                            "euler_identity_check": True,
+                            "asset_sum_check": True,
+                            "factor_sum_check": True,
+                            "validation_summary": "All checks passed"
+                        }
+                    },
+                    "benchmark": {
+                        "decomposer_results": {
+                            "total_risk": 0.0220,
+                            "factor_risk_contribution": 0.0160,
+                            "specific_risk_contribution": 0.0060,
+                            "factor_risk_percentage": 73.0,
+                            "specific_risk_percentage": 27.0,
+                            "factor_contributions": {
+                                "Market": 90.0, "Size": 40.0, "Value": 25.0, "Momentum": 15.0
+                            },
+                            "asset_contributions": {
+                                "CA": 110.0, "OVL": 70.0, "IG": 65.0, "EQLIKE": 35.0
+                            }
+                        },
+                        "validation": {"euler_identity_check": True}
+                    },
+                    "active": {
+                        "decomposer_results": {
+                            "total_risk": 0.0080,
+                            "factor_risk_contribution": 0.0050,
+                            "specific_risk_contribution": 0.0030,
+                            "factor_risk_percentage": 62.5,
+                            "specific_risk_percentage": 37.5,
+                            "factor_contributions": {
+                                "Market": 10.0, "Size": -5.0, "Value": 20.0, "Momentum": -10.0
+                            },
+                            "asset_contributions": {
+                                "CA": -20.0, "OVL": 15.0, "IG": -10.0, "EQLIKE": 15.0
+                            }
+                        },
+                        "allocation_selection": {
+                            "allocation_factor_contributions": {"Market": 5.0, "Size": -2.0},
+                            "selection_factor_contributions": {"Value": 15.0, "Momentum": -8.0},
+                            "interaction_contributions": {"Market": 0.5},
+                            "allocation_total": 3.0,
+                            "selection_total": 7.0,
+                            "interaction_total": 0.5
+                        },
+                        "validation": {"euler_identity_check": True}
+                    }
+                },
+                "CA": {
+                    "portfolio": {
+                        "decomposer_results": {
+                            "total_risk": 0.0180,
+                            "factor_risk_contribution": 0.0140,
+                            "specific_risk_contribution": 0.0040,
+                            "factor_risk_percentage": 78.0,
+                            "specific_risk_percentage": 22.0,
+                            "factor_contributions": {
+                                "Market": 80.0, "Size": 30.0, "Value": 20.0, "Momentum": 10.0
+                            },
+                            "asset_contributions": {}
+                        },
+                        "validation": {"euler_identity_check": True}
+                    }
+                }
+            },
+            
+            # Hierarchical matrices storage
+            "hierarchical_matrices": {
+                "TOTAL": {
+                    "portfolio": {
+                        "beta_matrix": [[0.95, 0.15, -0.05, 0.25], [0.85, 0.20, 0.10, -0.15]],
+                        "weighted_beta_matrix": [[0.285, 0.045, -0.015, 0.075], [0.212, 0.050, 0.025, -0.037]]
+                    }
+                }
             },
             "hierarchy": {
                 "root_component": "TOTAL",

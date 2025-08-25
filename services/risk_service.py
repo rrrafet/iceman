@@ -12,6 +12,7 @@ import joblib
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import numpy as np
+import pandas as pd
 
 # Add Spark modules to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../../..'))
@@ -153,35 +154,86 @@ class RiskAnalysisService:
     
     def _serialize_schema_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Serialize complex data types (numpy arrays, etc.) for storage/transmission.
+        Serialize complex data types (numpy arrays, pandas timestamps, etc.) for storage/transmission.
         
         Args:
             data: Raw schema data dictionary
             
         Returns:
-            Serialized data dictionary
+            Serialized data dictionary with all complex types converted to JSON-compatible types
         """
-        serialized = {}
+        return self._serialize_value(data)
+    
+    def _serialize_value(self, value: Any) -> Any:
+        """
+        Recursively serialize a value, handling all complex data types.
         
-        for key, value in data.items():
-            if isinstance(value, dict):
-                serialized[key] = self._serialize_schema_data(value)
-            elif isinstance(value, np.ndarray):
-                serialized[key] = value.tolist()
-            elif isinstance(value, (np.integer, np.floating)):
-                serialized[key] = value.item()
-            elif isinstance(value, list):
-                # Handle lists that might contain numpy objects
-                serialized[key] = [
-                    item.item() if isinstance(item, (np.integer, np.floating)) 
-                    else item.tolist() if isinstance(item, np.ndarray)
-                    else item
-                    for item in value
-                ]
-            else:
-                serialized[key] = value
+        Args:
+            value: Value to serialize
+            
+        Returns:
+            Serialized value compatible with JSON/Streamlit
+        """
+        # Handle None
+        if value is None:
+            return None
         
-        return serialized
+        # Handle dictionaries recursively
+        elif isinstance(value, dict):
+            return {k: self._serialize_value(v) for k, v in value.items()}
+        
+        # Handle lists and tuples recursively
+        elif isinstance(value, (list, tuple)):
+            return [self._serialize_value(item) for item in value]
+        
+        # Handle Pandas Timestamps and datetime objects
+        elif isinstance(value, (pd.Timestamp, datetime)):
+            return value.strftime('%Y-%m-%d %H:%M:%S') if hasattr(value, 'strftime') else str(value)
+        
+        # Handle Pandas Timedelta
+        elif isinstance(value, pd.Timedelta):
+            return str(value)
+        
+        # Handle NumPy arrays
+        elif isinstance(value, np.ndarray):
+            return value.tolist()
+        
+        # Handle NumPy scalars
+        elif isinstance(value, (np.integer, np.floating)):
+            return value.item()
+        
+        # Handle NumPy datetime64 and timedelta64
+        elif isinstance(value, (np.datetime64, np.timedelta64)):
+            return str(value)
+        
+        # Handle Pandas Series and DataFrame
+        elif isinstance(value, pd.Series):
+            # Convert Series to list, but serialize each element
+            return [self._serialize_value(item) for item in value.tolist()]
+        
+        elif isinstance(value, pd.DataFrame):
+            # Convert DataFrame to dict of lists with serialized values
+            result = {}
+            for col in value.columns:
+                result[col] = [self._serialize_value(item) for item in value[col].tolist()]
+            return result
+        
+        # Handle basic types (int, float, str, bool)
+        elif isinstance(value, (int, float, str, bool)):
+            return value
+        
+        # Handle complex numbers
+        elif isinstance(value, complex):
+            return {"real": value.real, "imag": value.imag}
+        
+        # Fallback: convert to string for unknown types
+        else:
+            try:
+                # Try to convert to string as last resort
+                return str(value)
+            except Exception:
+                # If even string conversion fails, return type information
+                return f"<{type(value).__name__}>"
     
     def _load_from_cache(self, cache_path: str) -> Dict[str, Any]:
         """Load data from pickle cache."""

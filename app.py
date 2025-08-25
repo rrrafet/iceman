@@ -6,12 +6,23 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
-from .data_loader import DataLoader
-from .components.sidebar import render_sidebar
-from .components.tabs.overview import render_overview_tab
-from .components.tabs.active_lens import render_active_lens_tab
-from .components.tabs.correlations import render_correlations_tab
-from .components.tabs.data_management import render_data_management_tab
+# Handle imports for both standalone and module execution
+try:
+    # Try relative imports first (when used as module)
+    from .data_loader import DataLoader
+    from .components.sidebar import render_sidebar
+    from .components.tabs.overview import render_overview_tab
+    from .components.tabs.active_lens import render_active_lens_tab
+    from .components.tabs.correlations import render_correlations_tab
+    from .components.tabs.data_management import render_data_management_tab
+except ImportError:
+    # Fall back to absolute imports (when run standalone)
+    from data_loader import DataLoader
+    from components.sidebar import render_sidebar
+    from components.tabs.overview import render_overview_tab
+    from components.tabs.active_lens import render_active_lens_tab
+    from components.tabs.correlations import render_correlations_tab
+    from components.tabs.data_management import render_data_management_tab
 
 def run():
     """Entry point for integration with main Spark UI launcher."""

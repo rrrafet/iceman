@@ -16,7 +16,22 @@ def render_top_contributors_chart(
     """Render horizontal bar chart of top risk contributors"""
     
     lens = sidebar_state.lens
-    contributions = data_loader.get_contributions(lens, contrib_type)
+    selected_node = sidebar_state.selected_node
+    
+    # Use hierarchical data if available
+    hierarchical_components = data_loader.get_available_hierarchical_components()
+    
+    if selected_node in hierarchical_components:
+        # Use hierarchical component data
+        if contrib_type == "by_asset":
+            contributions = data_loader.get_component_asset_contributions(selected_node, lens)
+        elif contrib_type == "by_factor":
+            contributions = data_loader.get_component_factor_contributions(selected_node, lens)
+        else:
+            contributions = {}
+    else:
+        # Fallback to legacy data access
+        contributions = data_loader.get_contributions(lens, contrib_type)
     
     if not contributions:
         st.info(f"No {contrib_type.replace('_', ' ')} data available")
@@ -63,20 +78,25 @@ def render_treemap_hierarchy(data_loader, sidebar_state) -> None:
     
     st.subheader("🌳 Hierarchy Footprint")
     
-    # Get hierarchy and adjacency data
-    hierarchy = data_loader.get_hierarchy_info()
-    adjacency_list = hierarchy.get('adjacency_list', {})
-    
     current_node = sidebar_state.selected_node
-    children = adjacency_list.get(current_node, [])
+    lens = sidebar_state.lens
+    
+    # Use hierarchical data navigation
+    children = data_loader.get_drilldown_options(current_node)
     
     if not children:
         st.info(f"No child components found for {current_node}")
         return
     
-    # Get contributions for children
-    lens = sidebar_state.lens
-    contributions = data_loader.get_contributions(lens, "by_asset")
+    # Get contributions for children using hierarchical data
+    hierarchical_components = data_loader.get_available_hierarchical_components()
+    
+    if current_node in hierarchical_components:
+        # Use hierarchical component data
+        contributions = data_loader.get_component_asset_contributions(current_node, lens)
+    else:
+        # Fallback to legacy data access
+        contributions = data_loader.get_contributions(lens, "by_asset")
     
     # Prepare treemap data
     child_data = []
