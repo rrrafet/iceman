@@ -117,13 +117,25 @@ class RiskResultSchema:
                 "timestamp": self.timestamp.isoformat(),
                 "data_frequency": self.data_frequency,
                 "annualized": self.annualized,
-                "schema_version": "2.0",  # Updated for multi-lens support
+                "schema_version": "3.0",  # Updated for complete hierarchical support
                 "context_info": {}
             },
             "identifiers": {
                 "asset_names": self.asset_names.copy(),
                 "factor_names": self.factor_names.copy(),
                 "component_ids": self.component_ids.copy()
+            },
+            
+            # Complete hierarchical risk database - every component has full decomposition
+            "hierarchical_risk_data": {
+                # Structure: {component_id: {lens: {decomposer_results + validation}}}
+                # Each component contains complete risk decomposition for all lenses
+            },
+            
+            # Hierarchical matrices storage - matrices for every component and lens
+            "hierarchical_matrices": {
+                # Structure: {component_id: {lens: {matrix_type: matrix_data}}}
+                # Contains all risk calculation matrices at component level
             },
             
             # Hierarchical structure information
@@ -1307,6 +1319,250 @@ class RiskResultSchema:
             }
         }
     
+    # Hierarchical Risk Data Management Methods
+    
+    def set_component_full_decomposition(
+        self,
+        component_id: str,
+        lens: str,
+        decomposer_result: Dict[str, Any]
+    ) -> None:
+        """
+        Set complete risk decomposition results for a specific component and lens.
+        
+        Parameters
+        ----------
+        component_id : str
+            Component identifier (node or leaf)
+        lens : str  
+            Lens type ('portfolio', 'benchmark', or 'active')
+        decomposer_result : dict
+            Complete decomposer results dictionary containing:
+            - total_risk, factor_risk_contribution, specific_risk_contribution
+            - factor_contributions, asset_contributions  
+            - factor_loadings_matrix, weighted_betas, risk_contribution_matrix
+            - covariance_matrix, correlation_matrix, validation results
+        """
+        if lens not in ['portfolio', 'benchmark', 'active']:
+            raise ValueError("lens must be 'portfolio', 'benchmark', or 'active'")
+        
+        # Initialize component if not exists
+        if component_id not in self._data["hierarchical_risk_data"]:
+            self._data["hierarchical_risk_data"][component_id] = {}
+        
+        # Set the complete decomposition data
+        self._data["hierarchical_risk_data"][component_id][lens] = {
+            "decomposer_results": {
+                "total_risk": decomposer_result.get("total_risk", 0.0),
+                "factor_risk_contribution": decomposer_result.get("factor_risk_contribution", 0.0),  
+                "specific_risk_contribution": decomposer_result.get("specific_risk_contribution", 0.0),
+                "factor_risk_percentage": decomposer_result.get("factor_risk_percentage", 0.0),
+                "specific_risk_percentage": decomposer_result.get("specific_risk_percentage", 0.0),
+                "factor_contributions": decomposer_result.get("factor_contributions", {}),
+                "asset_contributions": decomposer_result.get("asset_contributions", {}),
+                "factor_loadings_matrix": decomposer_result.get("factor_loadings_matrix", {}),
+                "weighted_betas": decomposer_result.get("weighted_betas", {}),
+                "risk_contribution_matrix": decomposer_result.get("risk_contribution_matrix", {}),
+                "covariance_matrix": decomposer_result.get("covariance_matrix", []),
+                "correlation_matrix": decomposer_result.get("correlation_matrix", [])
+            },
+            "validation": {
+                "euler_identity_check": decomposer_result.get("euler_identity_check", True),
+                "asset_sum_check": decomposer_result.get("asset_sum_check", True),
+                "factor_sum_check": decomposer_result.get("factor_sum_check", True),
+                "validation_summary": decomposer_result.get("validation_summary", ""),
+                "validation_details": decomposer_result.get("validation_details", {})
+            }
+        }
+        
+        # Add active-specific data for active lens
+        if lens == "active":
+            allocation_selection = decomposer_result.get("allocation_selection", {})
+            self._data["hierarchical_risk_data"][component_id][lens]["allocation_selection"] = {
+                "allocation_factor_contributions": allocation_selection.get("allocation_factor_contributions", {}),
+                "selection_factor_contributions": allocation_selection.get("selection_factor_contributions", {}),
+                "interaction_contributions": allocation_selection.get("interaction_contributions", {}),
+                "allocation_total": allocation_selection.get("allocation_total", 0.0),
+                "selection_total": allocation_selection.get("selection_total", 0.0),
+                "interaction_total": allocation_selection.get("interaction_total", 0.0)
+            }
+    
+    def set_component_matrices(
+        self,
+        component_id: str,
+        lens: str,
+        matrices_dict: Dict[str, Any]
+    ) -> None:
+        """
+        Set risk calculation matrices for a specific component and lens.
+        
+        Parameters
+        ----------
+        component_id : str
+            Component identifier
+        lens : str
+            Lens type ('portfolio', 'benchmark', or 'active')  
+        matrices_dict : dict
+            Dictionary containing matrices:
+            - beta_matrix, weighted_beta_matrix
+            - factor_covariance, residual_covariance, total_covariance
+            - descendant_leaves list for reference
+        """
+        if lens not in ['portfolio', 'benchmark', 'active']:
+            raise ValueError("lens must be 'portfolio', 'benchmark', or 'active'")
+        
+        # Initialize component if not exists
+        if component_id not in self._data["hierarchical_matrices"]:
+            self._data["hierarchical_matrices"][component_id] = {}
+        
+        # Convert numpy arrays to lists for JSON serialization
+        matrix_data = {}
+        for key, value in matrices_dict.items():
+            if hasattr(value, 'tolist'):  # numpy array
+                matrix_data[key] = value.tolist()
+            elif isinstance(value, list):
+                matrix_data[key] = value
+            else:
+                matrix_data[key] = value
+        
+        self._data["hierarchical_matrices"][component_id][lens] = matrix_data
+    
+    def get_component_decomposition(
+        self, 
+        component_id: str,
+        lens: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get complete risk decomposition for a specific component and lens.
+        
+        Parameters
+        ----------
+        component_id : str
+            Component identifier
+        lens : str
+            Lens type ('portfolio', 'benchmark', or 'active')
+            
+        Returns
+        -------
+        dict or None
+            Complete decomposition data or None if not found
+        """
+        hierarchical_data = self._data.get("hierarchical_risk_data", {})
+        component_data = hierarchical_data.get(component_id, {})
+        return component_data.get(lens)
+    
+    def get_component_matrices(
+        self,
+        component_id: str,
+        lens: str,
+        matrix_type: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get matrices for a specific component and lens.
+        
+        Parameters
+        ----------
+        component_id : str
+            Component identifier
+        lens : str
+            Lens type ('portfolio', 'benchmark', or 'active')
+        matrix_type : str, optional
+            Specific matrix type to retrieve. If None, returns all matrices.
+            
+        Returns
+        -------
+        dict or None
+            Matrix data or None if not found
+        """
+        matrices_data = self._data.get("hierarchical_matrices", {})
+        component_matrices = matrices_data.get(component_id, {})
+        lens_matrices = component_matrices.get(lens, {})
+        
+        if matrix_type:
+            return lens_matrices.get(matrix_type)
+        return lens_matrices
+    
+    def get_component_factor_data(
+        self,
+        component_id: str,
+        lens: str
+    ) -> Dict[str, Any]:
+        """
+        Get factor-specific data for a component and lens.
+        
+        Parameters
+        ----------
+        component_id : str
+            Component identifier
+        lens : str
+            Lens type ('portfolio', 'benchmark', or 'active')
+            
+        Returns
+        -------
+        dict
+            Dictionary with factor contributions, exposures, and loadings
+        """
+        decomposition = self.get_component_decomposition(component_id, lens)
+        if not decomposition:
+            return {}
+        
+        decomposer_results = decomposition.get("decomposer_results", {})
+        return {
+            "factor_contributions": decomposer_results.get("factor_contributions", {}),
+            "factor_loadings_matrix": decomposer_results.get("factor_loadings_matrix", {}),
+            "weighted_betas": decomposer_results.get("weighted_betas", {})
+        }
+    
+    # Hierarchical Navigation Methods
+    
+    def get_available_components(self) -> List[str]:
+        """Get list of all components with hierarchical risk data."""
+        return list(self._data.get("hierarchical_risk_data", {}).keys())
+    
+    def get_component_children(self, component_id: str) -> List[str]:
+        """Get direct children of a component from hierarchy."""
+        hierarchy = self._data.get("hierarchy", {})
+        adjacency_list = hierarchy.get("adjacency_list", {})
+        return adjacency_list.get(component_id, [])
+    
+    def get_component_parent(self, component_id: str) -> Optional[str]:
+        """Get parent of a component from hierarchy."""
+        hierarchy = self._data.get("hierarchy", {})
+        component_relationships = hierarchy.get("component_relationships", {})
+        component_info = component_relationships.get(component_id, {})
+        return component_info.get("parent")
+    
+    def get_component_descendants(self, component_id: str) -> List[str]:
+        """Get all descendant components (recursive children)."""
+        descendants = []
+        children = self.get_component_children(component_id)
+        
+        for child in children:
+            descendants.append(child)
+            # Recursively get grandchildren
+            descendants.extend(self.get_component_descendants(child))
+        
+        return descendants
+    
+    def get_component_hierarchy_path(self, component_id: str) -> List[str]:
+        """Get hierarchy path from root to component."""
+        path = []
+        current = component_id
+        
+        while current:
+            path.append(current)
+            current = self.get_component_parent(current)
+        
+        return list(reversed(path))  # Root to component order
+    
+    def can_drill_down(self, component_id: str) -> bool:
+        """Check if component has children to drill down into."""
+        return len(self.get_component_children(component_id)) > 0
+    
+    def can_drill_up(self, component_id: str) -> bool:
+        """Check if component has parent to drill up to."""
+        return self.get_component_parent(component_id) is not None
+    
     def set_factor_risk_contributions_matrix(self, matrix: Union[np.ndarray, Dict[str, Dict[str, float]]]) -> None:
         """
         Set factor risk contributions matrix (Asset × Factor).
@@ -1724,6 +1980,286 @@ class RiskResultSchema:
             )
         }
     
+    def _validate_full_hierarchy_consistency(self, validation_results: Dict[str, Any]) -> None:
+        """Validate hierarchical risk data consistency and completeness."""
+        
+        hierarchical_data = self._data.get("hierarchical_risk_data", {})
+        hierarchical_matrices = self._data.get("hierarchical_matrices", {})
+        validation_issues = []
+        
+        if not hierarchical_data:
+            validation_results["hierarchical_risk_data"] = {
+                "passes": True,
+                "message": "No hierarchical risk data to validate"
+            }
+            return
+        
+        # 1. Validate that all components have data for all lenses
+        all_components = set(hierarchical_data.keys())
+        expected_lenses = {'portfolio', 'benchmark', 'active'}
+        
+        for component_id in all_components:
+            component_data = hierarchical_data[component_id]
+            available_lenses = set(component_data.keys())
+            missing_lenses = expected_lenses - available_lenses
+            
+            if missing_lenses:
+                validation_issues.append(
+                    f"Component '{component_id}' missing lens data: {missing_lenses}"
+                )
+        
+        # 2. Validate decomposition consistency within each component
+        decomposition_issues = 0
+        for component_id, component_data in hierarchical_data.items():
+            for lens, lens_data in component_data.items():
+                decomposer_results = lens_data.get("decomposer_results", {})
+                
+                # Check Euler identity for each component
+                total_risk = decomposer_results.get("total_risk", 0.0)
+                factor_risk = decomposer_results.get("factor_risk_contribution", 0.0)
+                specific_risk = decomposer_results.get("specific_risk_contribution", 0.0)
+                
+                if total_risk > 0:
+                    decomp_sum = factor_risk + specific_risk
+                    difference = abs(decomp_sum - total_risk)
+                    
+                    if difference > 1e-6:  # Tolerance for numerical precision
+                        validation_issues.append(
+                            f"Euler identity violation in '{component_id}' {lens}: "
+                            f"difference {difference:.8f}"
+                        )
+                        decomposition_issues += 1
+        
+        # 3. Validate hierarchical aggregation consistency
+        hierarchy = self._data.get("hierarchy", {})
+        component_relationships = hierarchy.get("component_relationships", {})
+        aggregation_issues = 0
+        
+        for component_id, relationships in component_relationships.items():
+            children = relationships.get("children", [])
+            if not children:  # Skip leaf components
+                continue
+            
+            # Check if parent risk approximately equals sum of children risks
+            for lens in expected_lenses:
+                parent_data = hierarchical_data.get(component_id, {}).get(lens, {})
+                parent_results = parent_data.get("decomposer_results", {})
+                parent_total_risk = parent_results.get("total_risk", 0.0)
+                
+                if parent_total_risk == 0.0:
+                    continue  # Skip if no parent data
+                
+                children_total_risk = 0.0
+                children_with_data = 0
+                
+                for child_id in children:
+                    child_data = hierarchical_data.get(child_id, {}).get(lens, {})
+                    child_results = child_data.get("decomposer_results", {})
+                    child_risk = child_results.get("total_risk", 0.0)
+                    
+                    if child_risk > 0:
+                        children_total_risk += child_risk ** 2  # Risk aggregation via variance
+                        children_with_data += 1
+                
+                if children_with_data > 0:
+                    # Compare with parent (accounting for diversification)
+                    children_aggregated_risk = np.sqrt(children_total_risk)
+                    risk_ratio = children_aggregated_risk / parent_total_risk if parent_total_risk > 0 else 0
+                    
+                    # Allow reasonable diversification (children sum can be higher than parent)
+                    if risk_ratio > 2.0 or risk_ratio < 0.5:  # Outside reasonable bounds
+                        validation_issues.append(
+                            f"Hierarchical risk aggregation issue in '{component_id}' {lens}: "
+                            f"parent={parent_total_risk:.6f}, children_agg={children_aggregated_risk:.6f}, "
+                            f"ratio={risk_ratio:.2f}"
+                        )
+                        aggregation_issues += 1
+        
+        # 4. Validate matrix consistency
+        matrix_issues = 0
+        for component_id in all_components:
+            component_matrices = hierarchical_matrices.get(component_id, {})
+            component_risk_data = hierarchical_data.get(component_id, {})
+            
+            for lens in expected_lenses:
+                lens_matrices = component_matrices.get(lens, {})
+                lens_risk_data = component_risk_data.get(lens, {})
+                
+                if lens_matrices and lens_risk_data:
+                    # Check matrix dimensions consistency
+                    beta_matrix = lens_matrices.get("beta_matrix", [])
+                    factor_contributions = lens_risk_data.get("decomposer_results", {}).get("factor_contributions", {})
+                    
+                    if beta_matrix and factor_contributions:
+                        n_factors_matrix = len(beta_matrix[0]) if beta_matrix else 0
+                        n_factors_contrib = len(factor_contributions)
+                        
+                        if n_factors_matrix != n_factors_contrib:
+                            validation_issues.append(
+                                f"Matrix dimension mismatch in '{component_id}' {lens}: "
+                                f"beta_matrix factors={n_factors_matrix}, contributions factors={n_factors_contrib}"
+                            )
+                            matrix_issues += 1
+        
+        # Compile validation results
+        total_issues = len(validation_issues)
+        
+        validation_results["hierarchical_risk_consistency"] = {
+            "passes": total_issues == 0,
+            "issues": validation_issues if total_issues <= 20 else validation_issues[:20] + [f"... and {total_issues - 20} more issues"],
+            "summary": {
+                "total_components": len(all_components),
+                "decomposition_issues": decomposition_issues,
+                "aggregation_issues": aggregation_issues,
+                "matrix_issues": matrix_issues,
+                "total_issues": total_issues
+            },
+            "message": (
+                "Hierarchical risk validation passed" if total_issues == 0 
+                else f"Hierarchical risk validation failed with {total_issues} issues"
+            )
+        }
+    
+    def validate_component_decomposition(self, component_id: str) -> Dict[str, Any]:
+        """
+        Validate risk decomposition for a specific component.
+        
+        Parameters
+        ----------
+        component_id : str
+            Component identifier to validate
+            
+        Returns
+        -------
+        dict
+            Validation results for the component
+        """
+        hierarchical_data = self._data.get("hierarchical_risk_data", {})
+        component_data = hierarchical_data.get(component_id, {})
+        
+        if not component_data:
+            return {
+                "passes": False,
+                "message": f"No hierarchical data found for component '{component_id}'"
+            }
+        
+        validation_results = {}
+        
+        for lens, lens_data in component_data.items():
+            decomposer_results = lens_data.get("decomposer_results", {})
+            
+            # Validate Euler identity
+            total_risk = decomposer_results.get("total_risk", 0.0)
+            factor_risk = decomposer_results.get("factor_risk_contribution", 0.0)
+            specific_risk = decomposer_results.get("specific_risk_contribution", 0.0)
+            
+            decomp_sum = factor_risk + specific_risk
+            difference = abs(decomp_sum - total_risk) if total_risk > 0 else 0
+            
+            validation_results[f"{lens}_euler_identity"] = {
+                "passes": difference < 1e-6,
+                "difference": difference,
+                "expected": total_risk,
+                "actual": decomp_sum,
+                "message": f"{lens} Euler identity check: {difference:.8f} difference"
+            }
+            
+            # Validate factor contributions sum
+            factor_contributions = decomposer_results.get("factor_contributions", {})
+            if factor_contributions:
+                factor_sum = sum(abs(contrib) for contrib in factor_contributions.values())
+                expected_factor = abs(factor_risk)
+                factor_diff = abs(factor_sum - expected_factor)
+                
+                validation_results[f"{lens}_factor_contributions"] = {
+                    "passes": factor_diff < 1e-6,
+                    "difference": factor_diff,
+                    "expected": expected_factor,
+                    "actual": factor_sum,
+                    "message": f"{lens} factor contributions check: {factor_diff:.8f} difference"
+                }
+        
+        # Overall component validation
+        all_passed = all(result.get("passes", False) for result in validation_results.values())
+        validation_results["overall"] = {
+            "passes": all_passed,
+            "component_id": component_id,
+            "message": f"Component validation {'passed' if all_passed else 'failed'}"
+        }
+        
+        return validation_results
+    
+    def validate_hierarchical_aggregation(self) -> Dict[str, Any]:
+        """
+        Validate that parent component risks properly aggregate from children.
+        
+        Returns
+        -------
+        dict
+            Hierarchical aggregation validation results
+        """
+        hierarchical_data = self._data.get("hierarchical_risk_data", {})
+        hierarchy = self._data.get("hierarchy", {})
+        component_relationships = hierarchy.get("component_relationships", {})
+        
+        validation_results = {}
+        
+        for parent_id, relationships in component_relationships.items():
+            children = relationships.get("children", [])
+            if not children:  # Skip leaf components
+                continue
+            
+            parent_validation = {}
+            
+            for lens in ['portfolio', 'benchmark', 'active']:
+                parent_data = hierarchical_data.get(parent_id, {}).get(lens, {})
+                parent_results = parent_data.get("decomposer_results", {})
+                parent_total_risk = parent_results.get("total_risk", 0.0)
+                
+                # Calculate expected risk from children
+                children_risks = []
+                for child_id in children:
+                    child_data = hierarchical_data.get(child_id, {}).get(lens, {})
+                    child_results = child_data.get("decomposer_results", {})
+                    child_risk = child_results.get("total_risk", 0.0)
+                    if child_risk > 0:
+                        children_risks.append(child_risk)
+                
+                if children_risks and parent_total_risk > 0:
+                    # Simple aggregation check (actual implementation may use correlation)
+                    children_sum_of_squares = sum(risk ** 2 for risk in children_risks)
+                    expected_parent_risk = np.sqrt(children_sum_of_squares)
+                    
+                    difference = abs(parent_total_risk - expected_parent_risk)
+                    relative_diff = difference / parent_total_risk if parent_total_risk > 0 else 0
+                    
+                    parent_validation[f"{lens}_aggregation"] = {
+                        "passes": relative_diff < 0.5,  # Allow 50% difference for diversification
+                        "parent_risk": parent_total_risk,
+                        "expected_risk": expected_parent_risk,
+                        "difference": difference,
+                        "relative_difference": relative_diff,
+                        "children_count": len(children_risks),
+                        "message": f"{lens} aggregation check: {relative_diff:.1%} relative difference"
+                    }
+            
+            validation_results[parent_id] = parent_validation
+        
+        # Overall aggregation validation
+        all_checks = []
+        for parent_results in validation_results.values():
+            all_checks.extend([check.get("passes", False) for check in parent_results.values()])
+        
+        overall_passed = all(all_checks) if all_checks else True
+        validation_results["overall"] = {
+            "passes": overall_passed,
+            "parents_checked": len(validation_results),
+            "total_checks": len(all_checks),
+            "message": f"Hierarchical aggregation {'passed' if overall_passed else 'failed'}"
+        }
+        
+        return validation_results
+    
     def validate_schema(self) -> Dict[str, Any]:
         """
         Validate the schema completeness and consistency.
@@ -1885,6 +2421,9 @@ class RiskResultSchema:
         
         # Time series validation
         self._validate_time_series_consistency(validation_results)
+        
+        # Hierarchical validation
+        self._validate_full_hierarchy_consistency(validation_results)
         
         # Overall validation
         all_passed = all(result.get("passes", False) for result in validation_results.values())
