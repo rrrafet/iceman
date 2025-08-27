@@ -42,7 +42,7 @@ def render_active_lens_tab(data_loader, sidebar_state):
 def render_active_kpis(data_loader, sidebar_state):
     """Render active-specific KPIs"""
     
-    st.subheader("🎯 Active Risk KPIs")
+    st.subheader("Active Risk KPIs")
     
     active_metrics = data_loader.get_core_metrics("active", sidebar_state.selected_node)
     
@@ -72,7 +72,7 @@ def render_active_kpis(data_loader, sidebar_state):
 def render_tilts_vs_impact_scatter(data_loader, sidebar_state):
     """Render scatter plot of active weights vs active contributions"""
     
-    st.subheader("📊 Tilts vs Impact")
+    st.subheader("Tilts vs Impact")
     
     # Get active weights and contributions
     active_weights = data_loader.get_weights("active_weights")
@@ -146,7 +146,7 @@ def render_tilts_vs_impact_scatter(data_loader, sidebar_state):
 def render_weight_comparison_bars(data_loader, sidebar_state):
     """Render dual bars comparing portfolio vs benchmark weights"""
     
-    st.subheader("⚖️ Weight Comparison")
+    st.subheader("Weight Comparison")
     
     # Get weights
     portfolio_weights = data_loader.get_weights("portfolio_weights")
@@ -216,7 +216,7 @@ def render_weight_comparison_bars(data_loader, sidebar_state):
 def render_active_factor_story(data_loader, sidebar_state):
     """Render active factor contributions and exposures"""
     
-    st.subheader("🔍 Active Factor Story")
+    st.subheader("Active Factor Story")
     
     col1, col2 = st.columns(2)
     
@@ -309,7 +309,7 @@ def render_active_factor_story(data_loader, sidebar_state):
 def render_active_matrices(data_loader, sidebar_state):
     """Render matrix data if available"""
     
-    st.subheader("📋 Matrix Analysis")
+    st.subheader("Matrix Analysis")
     
     col1, col2 = st.columns(2)
     

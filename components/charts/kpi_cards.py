@@ -54,7 +54,7 @@ def render_kpi_cards_portfolio_active(
         portfolio_metrics = data_loader.get_core_metrics("portfolio", sidebar_state.selected_node)
         active_metrics = data_loader.get_core_metrics("active", sidebar_state.selected_node)
     
-    st.subheader("📊 Key Performance Indicators")
+    st.subheader("Key Performance Indicators")
     
     # Two columns for Portfolio | Active
     col1, col2 = st.columns(2)
@@ -98,7 +98,7 @@ def render_kpi_cards_portfolio_active(
 def render_risk_composition_chart(data_loader, sidebar_state) -> None:
     """Render stacked bar chart for Factor vs Specific risk composition"""
     
-    st.subheader("🏗️ Risk Composition")
+    st.subheader("Risk Composition")
     
     # Get metrics for all three lenses
     lenses = ["portfolio", "benchmark", "active"]

@@ -39,7 +39,7 @@ def render_correlations_tab(data_loader, sidebar_state):
     st.divider()
     
     # Explanation section
-    st.subheader("📖 Understanding Correlations")
+    st.subheader("Understanding Correlations")
     
     st.markdown("""
     **Interpretation Guide:**
@@ -57,7 +57,7 @@ def render_correlations_tab(data_loader, sidebar_state):
     """)
     
     # Data availability status
-    st.subheader("📊 Data Status")
+    st.subheader("Data Status")
     
     # Check what correlation data is available
     factor_corrs = data_loader.get_correlations("factor_correlations")
@@ -67,19 +67,19 @@ def render_correlations_tab(data_loader, sidebar_state):
     status_info = []
     
     if factor_corrs:
-        status_info.append("✅ Factor-factor correlations available")
+        status_info.append("Factor-factor correlations available")
     else:
-        status_info.append("⏳ Factor-factor correlations will populate when computed")
+        status_info.append("Factor-factor correlations will populate when computed")
     
     if portfolio_factor_corrs:
-        status_info.append("✅ Portfolio-factor correlations available")
+        status_info.append("Portfolio-factor correlations available")
     else:
-        status_info.append("⏳ Portfolio-factor correlations will populate when computed")
+        status_info.append("Portfolio-factor correlations will populate when computed")
     
     if hierarchical_corrs:
-        status_info.append("✅ Hierarchical correlations available")
+        status_info.append("Hierarchical correlations available")
     else:
-        status_info.append("⏳ Hierarchical correlations will populate when computed")
+        status_info.append("Hierarchical correlations will populate when computed")
     
     # Time series data availability
     factor_names = data_loader.get_factor_names()
@@ -87,7 +87,7 @@ def render_correlations_tab(data_loader, sidebar_state):
     factor_returns = time_series.get('factor_returns', {})
     
     available_factor_series = len([f for f in factor_names if f in factor_returns])
-    status_info.append(f"✅ Factor return series: {available_factor_series}/{len(factor_names)} available")
+    status_info.append(f"Factor return series: {available_factor_series}/{len(factor_names)} available")
     
     # Portfolio/active return series
     component = sidebar_state.selected_node
@@ -95,14 +95,14 @@ def render_correlations_tab(data_loader, sidebar_state):
     active_data = data_loader.get_time_series_data('active_returns', component)
     
     if portfolio_data:
-        status_info.append(f"✅ Portfolio returns: {len(portfolio_data)} periods available")
+        status_info.append(f"Portfolio returns: {len(portfolio_data)} periods available")
     else:
-        status_info.append("⏳ Portfolio returns not available for selected component")
+        status_info.append("Portfolio returns not available for selected component")
     
     if active_data:
-        status_info.append(f"✅ Active returns: {len(active_data)} periods available")
+        status_info.append(f"Active returns: {len(active_data)} periods available")
     else:
-        status_info.append("⏳ Active returns not available for selected component")
+        status_info.append("Active returns not available for selected component")
     
     # Display status
     for status in status_info:

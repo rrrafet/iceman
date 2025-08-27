@@ -27,18 +27,18 @@ def render_data_management_tab(data_loader, sidebar_state):
         st.divider()
         
         # Integration status
-        st.subheader("🔗 Integration Status")
+        st.subheader("Integration Status")
         
         if data_loader.has_risk_service():
-            st.success("✅ RiskAnalysisService is active")
+            st.success("RiskAnalysisService is active")
             
             # Show integration capabilities
             st.markdown("""
             **Active Capabilities:**
-            - ✅ Real-time risk data generation
-            - ✅ Cache management
-            - ✅ Schema serialization
-            - ✅ Dynamic data refresh
+            - Real-time risk data generation
+            - Cache management
+            - Schema serialization
+            - Dynamic data refresh
             """)
             
             # Cache statistics
@@ -46,7 +46,7 @@ def render_data_management_tab(data_loader, sidebar_state):
             cache_files = cache_info.get('cache_files', [])
             
             if cache_files:
-                st.subheader("📊 Cache Statistics")
+                st.subheader("Cache Statistics")
                 
                 total_size = sum(f['size_mb'] for f in cache_files)
                 
@@ -60,7 +60,7 @@ def render_data_management_tab(data_loader, sidebar_state):
                     st.metric("Latest Update", latest_file['modified'][:10])
                 
                 # File details table
-                st.subheader("📂 Cache Files")
+                st.subheader("Cache Files")
                 import pandas as pd
                 cache_df = pd.DataFrame(cache_files)
                 cache_df['size_mb'] = cache_df['size_mb'].round(2)
@@ -68,12 +68,12 @@ def render_data_management_tab(data_loader, sidebar_state):
                 st.dataframe(cache_df, use_container_width=True)
         
         else:
-            st.warning("⚠️ RiskAnalysisService not available")
+            st.warning("RiskAnalysisService not available")
             st.markdown("""
             **Current Limitations:**
-            - ❌ No real-time data generation
-            - ❌ No cache management
-            - ❌ Static data source only
+            - No real-time data generation
+            - No cache management
+            - Static data source only
             
             **To enable full integration:**
             1. Ensure Spark modules are available in Python path
@@ -88,7 +88,7 @@ def render_data_management_tab(data_loader, sidebar_state):
         st.divider()
         
         # Technical information
-        st.subheader("🔧 Technical Info")
+        st.subheader("Technical Info")
         
         # Python path info
         with st.expander("Python Path"):
@@ -115,21 +115,21 @@ def render_data_management_tab(data_loader, sidebar_state):
             for module_name in modules_to_check:
                 try:
                     __import__(module_name)
-                    st.success(f"✅ {module_name}")
+                    st.success(f"Available: {module_name}")
                 except ImportError:
-                    st.error(f"❌ {module_name}")
+                    st.error(f"Missing: {module_name}")
     
     st.divider()
     
     # Workflow examples
-    st.subheader("📚 Integration Workflows")
+    st.subheader("Integration Workflows")
     
     # Tabs for different workflows
     workflow_tabs = st.tabs([
-        "📓 Notebook → Streamlit",
-        "🔄 Real-time Integration", 
-        "💾 Cache Management",
-        "🐛 Troubleshooting"
+        "Notebook → Streamlit",
+        "Real-time Integration", 
+        "Cache Management",
+        "Troubleshooting"
     ])
     
     with workflow_tabs[0]:
@@ -163,7 +163,7 @@ def render_data_management_tab(data_loader, sidebar_state):
         ```
         
         **Step 3: Refresh Streamlit**
-        - Click the "🔄 Refresh Risk Data" button in the sidebar
+        - Click the "Refresh Risk Data" button in the sidebar
         - Or restart the Streamlit app to pick up new cache files
         """)
     

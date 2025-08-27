@@ -8,12 +8,188 @@ def render_sidebar(data_loader) -> SidebarState:
     with st.sidebar:
         st.header("🎯 Maverick Controls")
         
+        # Portfolio Configuration Selection
+        st.subheader("📋 Portfolio Configuration")
+        
+        # Get available configurations
+        try:
+            import os
+            from config.portfolio_loader import get_available_configurations
+            
+            config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config')
+            available_configs = get_available_configurations(config_dir)
+            
+            if available_configs:
+                # Create options for selectbox
+                config_options = {f"{cfg['name']}\n{cfg['description'][:50]}..." if len(cfg['description']) > 50 else f"{cfg['name']}\n{cfg['description']}": cfg['id'] for cfg in available_configs}
+                
+                selected_config_display = st.selectbox(
+                    "Select portfolio configuration",
+                    options=list(config_options.keys()),
+                    index=0,
+                    key="portfolio_config_selector",
+                    help="Choose a portfolio configuration to load"
+                )
+                
+                selected_config_id = config_options[selected_config_display]
+                
+                # Show selected config details
+                selected_config_info = next(cfg for cfg in available_configs if cfg['id'] == selected_config_id)
+                st.caption(f"**{selected_config_info['name']}**")
+                st.caption(selected_config_info['description'])
+                
+                # Button to load configuration
+                if st.button("🔄 Load Configuration", key="load_config_btn"):
+                    try:
+                        # Store selected config in session state for data loader
+                        st.session_state.selected_portfolio_config = selected_config_id
+                        st.success(f"Loading {selected_config_info['name']}...")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to load configuration: {str(e)}")
+            else:
+                st.warning("No portfolio configurations found")
+                st.caption("Add YAML files to config/portfolios/")
+                
+        except Exception as e:
+            st.error("Portfolio configuration system unavailable")
+            st.caption(f"Error: {str(e)}")
+        
+        st.divider()
+        
         # Snapshot metadata display
         st.subheader("Snapshot")
         metadata = data_loader.data.get('metadata', {})
         st.text(f"Analysis: {metadata.get('analysis_type', 'N/A')}")
         st.text(f"Frequency: {metadata.get('data_frequency', 'N/A')}")
         st.text(f"Schema: v{metadata.get('schema_version', 'N/A')}")
+        
+        # Show current configuration if loaded
+        if hasattr(st.session_state, 'selected_portfolio_config'):
+            st.text(f"Config: {st.session_state.selected_portfolio_config}")
+        
+        st.divider()
+        
+        # Risk Model Selection
+        st.subheader("🔬 Risk Model")
+        
+        try:
+            from config.risk_model_loader import list_available_risk_models
+            
+            available_models = list_available_risk_models()
+            
+            if available_models:
+                # Create dropdown options
+                model_options = {}
+                for model in available_models:
+                    display_name = f"{model['name']}"
+                    description = model['description'][:60] + "..." if len(model['description']) > 60 else model['description']
+                    model_options[f"{display_name}\n{description}"] = model['id']
+                
+                selected_model_display = st.selectbox(
+                    "Select risk model",
+                    options=list(model_options.keys()),
+                    index=0,
+                    key="risk_model_selector",
+                    help="Choose a risk model for factor analysis"
+                )
+                
+                selected_model_id = model_options[selected_model_display]
+                
+                # Show selected model details
+                selected_model = next(m for m in available_models if m['id'] == selected_model_id)
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.caption(f"**Factors:** {selected_model['num_factors']}")
+                with col2:
+                    st.caption(f"**Source:** {selected_model['source']}")
+                
+                st.caption(f"**Period:** {selected_model['start_date']} to {selected_model['end_date']}")
+                
+                # Show factor names (truncated)
+                factors_display = ", ".join(selected_model['factors'][:5])
+                if len(selected_model['factors']) > 5:
+                    factors_display += f", ... (+{len(selected_model['factors']) - 5} more)"
+                st.caption(f"**Factors:** {factors_display}")
+                
+                # Button to load risk model
+                if st.button("🔄 Load Risk Model", key="load_risk_model_btn"):
+                    try:
+                        if data_loader.load_risk_model(selected_model_id):
+                            st.session_state.selected_risk_model = selected_model_id
+                            st.success(f"Loaded {selected_model['name']}")
+                            st.rerun()
+                        else:
+                            st.error("Failed to load risk model")
+                    except Exception as e:
+                        st.error(f"Error loading risk model: {str(e)}")
+                        
+            else:
+                st.warning("No risk models found")
+                st.caption("Check risk model configuration")
+                
+        except Exception as e:
+            st.error("Risk model system unavailable")
+            st.caption(f"Error: {str(e)}")
+        
+        # Show current risk model if loaded
+        if hasattr(st.session_state, 'selected_risk_model'):
+            st.caption(f"**Active:** {st.session_state.selected_risk_model}")
+        
+        st.divider()
+        
+        # Risk Analysis Section  
+        st.subheader("⚡ Risk Analysis")
+        
+        try:
+            risk_status = data_loader.get_risk_analysis_status()
+            
+            if risk_status['available']:
+                # Show current status
+                if risk_status['ready_for_analysis']:
+                    st.success("✅ Ready for analysis")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.caption(f"Components: {risk_status['portfolio_components']}")
+                    with col2:
+                        st.caption(f"Factors: {risk_status['factor_count']}")
+                    
+                    # Run analysis button
+                    if st.button("🔍 Run Risk Analysis", key="run_risk_analysis_btn"):
+                        try:
+                            success = data_loader.run_risk_analysis(force_refresh=True)
+                            if success:
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Analysis failed: {str(e)}")
+                    
+                    # Show analysis status
+                    if risk_status['analysis_completed']:
+                        st.info(f"✅ Analysis completed")
+                        if risk_status['last_analysis']:
+                            # Parse timestamp for display
+                            try:
+                                from datetime import datetime
+                                dt = datetime.fromisoformat(risk_status['last_analysis'].replace('Z', '+00:00'))
+                                st.caption(f"Last run: {dt.strftime('%H:%M:%S')}")
+                            except:
+                                st.caption("Analysis available")
+                    
+                else:
+                    st.warning("⚠️ Need portfolio & risk model")
+                    if risk_status['portfolio_components'] == 0:
+                        st.caption("→ Load portfolio configuration")
+                    if risk_status['factor_count'] == 0:
+                        st.caption("→ Load risk model")
+                        
+            else:
+                st.error("Risk analysis unavailable")
+                st.caption(risk_status.get('message', 'Unknown error'))
+                
+        except Exception as e:
+            st.error("Risk analysis system error")
+            st.caption(f"Error: {str(e)}")
         
         st.divider()
         

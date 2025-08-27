@@ -1,395 +1,387 @@
 """
-Risk Analysis Service for Maverick Application
+Risk Analysis Service for Maverick UI
 
-Provides direct integration between Spark risk analysis components
-and Streamlit UI, enabling real-time risk data generation.
+Integrates the PortfolioRiskAnalyzer with portfolio graphs and factor returns
+to provide comprehensive risk analysis for the Maverick application.
 """
 
 import sys
 import os
-import pickle
-import joblib
-from typing import Dict, Any, Optional, List
-from datetime import datetime
-import numpy as np
 import pandas as pd
+import numpy as np
+from typing import Dict, Any, Optional, List, Union
+import logging
+from datetime import datetime
 
-# Add Spark modules to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../..'))
+# Add paths for spark module imports
+sys.path.append('/Users/rafet/Workspace/Spark')
+sys.path.append('/Users/rafet/Workspace/Spark/spark-portfolio')
 
-try:
-    from spark.portfolio.risk_analyzer import PortfolioRiskAnalyzer
-    from spark.portfolio.graph import PortfolioGraph
-    SPARK_AVAILABLE = True
-except ImportError:
-    SPARK_AVAILABLE = False
-    print("Warning: Spark modules not available. Using serialized data only.")
+logger = logging.getLogger(__name__)
 
-class RiskAnalysisService:
+
+class MaverickRiskService:
     """
-    Service class for generating and managing risk analysis data.
+    Risk analysis service for Maverick UI integrating PortfolioRiskAnalyzer.
     
-    Supports multiple data sources:
-    1. Direct analysis from PortfolioGraph + factor returns
-    2. Pickled RiskResultSchema objects
-    3. JSON serialized data (fallback)
+    This service provides a bridge between the Maverick UI data structures
+    and the Spark portfolio risk analysis framework.
     """
     
-    def __init__(
-        self,
-        portfolio_graph: Optional[object] = None,
-        factor_returns: Optional[object] = None,
-        cache_dir: str = None
-    ):
+    def __init__(self):
+        """Initialize the risk service."""
+        self.portfolio_graph = None
+        self.factor_returns = None
+        self.risk_analyzer = None
+        self.current_analysis_results = None
+        self.analysis_cache = {}
+        
+    def set_portfolio_graph(self, portfolio_graph):
         """
-        Initialize risk analysis service.
+        Set the portfolio graph for analysis.
         
         Args:
-            portfolio_graph: PortfolioGraph instance for direct analysis
-            factor_returns: Factor returns data for risk analysis
-            cache_dir: Directory for caching serialized results
+            portfolio_graph: PortfolioGraph instance from spark-portfolio
         """
         self.portfolio_graph = portfolio_graph
+        self.risk_analyzer = None  # Reset analyzer when portfolio changes
+        self.current_analysis_results = None
+        self.analysis_cache.clear()
+        
+        if portfolio_graph:
+            try:
+                from spark.portfolio.risk_analyzer import PortfolioRiskAnalyzer
+                self.risk_analyzer = PortfolioRiskAnalyzer(portfolio_graph)
+                logger.info(f"Risk analyzer created for portfolio with {len(portfolio_graph.components)} components")
+            except ImportError as e:
+                logger.warning(f"Could not import PortfolioRiskAnalyzer: {e}")
+                self.risk_analyzer = None
+    
+    def set_factor_returns(self, factor_returns: pd.DataFrame):
+        """
+        Set factor returns data for analysis.
+        
+        Args:
+            factor_returns: DataFrame with factors as columns, dates as index
+        """
         self.factor_returns = factor_returns
-        self.analyzer = None
-        self.cache_dir = cache_dir or os.path.join(os.path.dirname(__file__), "../cache")
+        # Clear cache when factor returns change
+        self.analysis_cache.clear()
+        self.current_analysis_results = None
         
-        # Ensure cache directory exists
-        os.makedirs(self.cache_dir, exist_ok=True)
-        
-        # Initialize analyzer if components available
-        if SPARK_AVAILABLE and portfolio_graph is not None:
-            self.analyzer = PortfolioRiskAnalyzer(portfolio_graph)
+        if factor_returns is not None:
+            logger.info(f"Factor returns set: {factor_returns.shape[1]} factors, {factor_returns.shape[0]} periods")
     
-    def get_risk_data(self, component: str = "TOTAL", use_cache: bool = True) -> Dict[str, Any]:
+    def is_ready_for_analysis(self) -> bool:
+        """Check if service is ready to perform risk analysis."""
+        return (
+            self.portfolio_graph is not None and 
+            self.factor_returns is not None and 
+            self.risk_analyzer is not None
+        )
+    
+    def run_risk_analysis(self, 
+                         root_component_id: str = None,
+                         force_refresh: bool = False,
+                         include_time_series: bool = True,
+                         **kwargs) -> Dict[str, Any]:
         """
-        Get comprehensive risk analysis data for specified component.
+        Run comprehensive risk analysis using PortfolioRiskAnalyzer.
         
         Args:
-            component: Component ID to analyze (default: "TOTAL")
-            use_cache: Whether to use cached data if available
+            root_component_id: Root component for analysis (default: first component)
+            force_refresh: Force fresh analysis ignoring cache
+            include_time_series: Include comprehensive time series data
+            **kwargs: Additional arguments for risk analysis
             
         Returns:
-            Dictionary containing complete risk analysis data
+            Dictionary with analysis results and metadata
         """
-        cache_key = f"risk_data_{component}.pkl"
-        cache_path = os.path.join(self.cache_dir, cache_key)
+        if not self.is_ready_for_analysis():
+            return self._create_error_result("Risk service not ready for analysis")
         
-        # Try to load from cache first
-        if use_cache and os.path.exists(cache_path):
-            try:
-                return self._load_from_cache(cache_path)
-            except Exception as e:
-                print(f"Warning: Failed to load cache {cache_path}: {e}")
+        # Determine root component
+        if root_component_id is None:
+            root_component_id = list(self.portfolio_graph.components.keys())[0]
         
-        # Generate fresh data if analyzer available
-        if self.analyzer and self.factor_returns is not None:
-            try:
-                schema = self.analyzer.get_comprehensive_schema(component, self.factor_returns)
-                data = self._serialize_schema_data(schema.data)
-                
-                # Cache the result
-                self._save_to_cache(data, cache_path)
-                
-                return data
-            except Exception as e:
-                print(f"Error generating risk data: {e}")
-        
-        # Fallback to mock data
-        print(f"Using mock data for component: {component}")
-        return self._create_mock_risk_data(component)
-    
-    def refresh_data(self, component: str = "TOTAL") -> Dict[str, Any]:
-        """
-        Force refresh of risk data, bypassing cache.
-        
-        Args:
-            component: Component ID to analyze
-            
-        Returns:
-            Fresh risk analysis data
-        """
-        return self.get_risk_data(component, use_cache=False)
-    
-    def save_schema_to_cache(self, schema_object: object, component: str = "TOTAL") -> str:
-        """
-        Save a RiskResultSchema object to cache for later use.
-        
-        Args:
-            schema_object: RiskResultSchema instance
-            component: Component ID for cache naming
-            
-        Returns:
-            Path to saved cache file
-        """
-        cache_path = os.path.join(self.cache_dir, f"schema_{component}.pkl")
+        # Check cache
+        cache_key = f"{root_component_id}_{include_time_series}_{hash(str(kwargs))}"
+        if not force_refresh and cache_key in self.analysis_cache:
+            logger.info(f"Returning cached analysis for {root_component_id}")
+            return self.analysis_cache[cache_key]
         
         try:
-            joblib.dump(schema_object, cache_path)
-            print(f"Schema saved to cache: {cache_path}")
-            return cache_path
-        except Exception as e:
-            print(f"Error saving schema to cache: {e}")
-            return ""
-    
-    def load_schema_from_cache(self, component: str = "TOTAL") -> Optional[object]:
-        """
-        Load RiskResultSchema object from cache.
-        
-        Args:
-            component: Component ID to load
+            logger.info(f"Running risk analysis for component '{root_component_id}'")
             
-        Returns:
-            RiskResultSchema object or None if not found
-        """
-        cache_path = os.path.join(self.cache_dir, f"schema_{component}.pkl")
-        
-        if os.path.exists(cache_path):
-            try:
-                return joblib.load(cache_path)
-            except Exception as e:
-                print(f"Error loading schema from cache: {e}")
-        
-        return None
-    
-    def _serialize_schema_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Serialize complex data types (numpy arrays, pandas timestamps, etc.) for storage/transmission.
-        
-        Args:
-            data: Raw schema data dictionary
+            # Run the risk analysis using PortfolioRiskAnalyzer
+            risk_schema = self.risk_analyzer.get_risk_summary(
+                root_component_id=root_component_id,
+                factor_returns=self.factor_returns,
+                include_time_series=include_time_series,
+                **kwargs
+            )
             
-        Returns:
-            Serialized data dictionary with all complex types converted to JSON-compatible types
-        """
-        return self._serialize_value(data)
-    
-    def _serialize_value(self, value: Any) -> Any:
-        """
-        Recursively serialize a value, handling all complex data types.
-        
-        Args:
-            value: Value to serialize
+            # Convert schema to Maverick-friendly format
+            analysis_result = self._convert_schema_to_maverick_format(
+                risk_schema, 
+                root_component_id,
+                include_time_series
+            )
             
-        Returns:
-            Serialized value compatible with JSON/Streamlit
-        """
-        # Handle None
-        if value is None:
-            return None
-        
-        # Handle dictionaries recursively
-        elif isinstance(value, dict):
-            return {k: self._serialize_value(v) for k, v in value.items()}
-        
-        # Handle lists and tuples recursively
-        elif isinstance(value, (list, tuple)):
-            return [self._serialize_value(item) for item in value]
-        
-        # Handle Pandas Timestamps and datetime objects
-        elif isinstance(value, (pd.Timestamp, datetime)):
-            return value.strftime('%Y-%m-%d %H:%M:%S') if hasattr(value, 'strftime') else str(value)
-        
-        # Handle Pandas Timedelta
-        elif isinstance(value, pd.Timedelta):
-            return str(value)
-        
-        # Handle NumPy arrays
-        elif isinstance(value, np.ndarray):
-            return value.tolist()
-        
-        # Handle NumPy scalars
-        elif isinstance(value, (np.integer, np.floating)):
-            return value.item()
-        
-        # Handle NumPy datetime64 and timedelta64
-        elif isinstance(value, (np.datetime64, np.timedelta64)):
-            return str(value)
-        
-        # Handle Pandas Series and DataFrame
-        elif isinstance(value, pd.Series):
-            # Convert Series to list, but serialize each element
-            return [self._serialize_value(item) for item in value.tolist()]
-        
-        elif isinstance(value, pd.DataFrame):
-            # Convert DataFrame to dict of lists with serialized values
-            result = {}
-            for col in value.columns:
-                result[col] = [self._serialize_value(item) for item in value[col].tolist()]
-            return result
-        
-        # Handle basic types (int, float, str, bool)
-        elif isinstance(value, (int, float, str, bool)):
-            return value
-        
-        # Handle complex numbers
-        elif isinstance(value, complex):
-            return {"real": value.real, "imag": value.imag}
-        
-        # Fallback: convert to string for unknown types
-        else:
-            try:
-                # Try to convert to string as last resort
-                return str(value)
-            except Exception:
-                # If even string conversion fails, return type information
-                return f"<{type(value).__name__}>"
-    
-    def _load_from_cache(self, cache_path: str) -> Dict[str, Any]:
-        """Load data from pickle cache."""
-        with open(cache_path, 'rb') as f:
-            return pickle.load(f)
-    
-    def _save_to_cache(self, data: Dict[str, Any], cache_path: str) -> None:
-        """Save data to pickle cache."""
-        with open(cache_path, 'wb') as f:
-            pickle.dump(data, f)
-    
-    def _create_mock_risk_data(self, component: str) -> Dict[str, Any]:
-        """
-        Create mock risk data for development/testing.
-        
-        Args:
-            component: Component ID
-            
-        Returns:
-            Mock risk analysis data
-        """
-        return {
-            "metadata": {
-                "analysis_type": "hierarchical",
-                "timestamp": datetime.now().isoformat(),
-                "data_frequency": "D",
-                "annualized": True,
-                "schema_version": "2.0",
-                "component": component
-            },
-            "identifiers": {
-                "factor_names": ["Market", "Size", "Value", "Momentum", "Quality", "Low_Vol"],
-                "component_names": ["TOTAL", "CA", "OVL", "IG", "EQLIKE"]
-            },
-            "hierarchy": {
-                "root_component": "TOTAL",
-                "component_metadata": {
-                    "TOTAL": {"type": "node", "level": 0},
-                    "CA": {"type": "node", "level": 1},
-                    "OVL": {"type": "leaf", "level": 2},
-                    "IG": {"type": "leaf", "level": 2},
-                    "EQLIKE": {"type": "leaf", "level": 2}
-                },
-                "adjacency_list": {
-                    "TOTAL": ["CA", "OVL", "IG", "EQLIKE"],
-                    "CA": []
-                }
-            },
-            "weights": {
-                "portfolio_weights": {"CA": 30.0, "OVL": 25.0, "IG": 25.0, "EQLIKE": 20.0},
-                "benchmark_weights": {"CA": 35.0, "OVL": 20.0, "IG": 30.0, "EQLIKE": 15.0},
-                "active_weights": {"CA": -5.0, "OVL": 5.0, "IG": -5.0, "EQLIKE": 5.0}
-            },
-            "portfolio": {
-                "core_metrics": {
-                    component: {
-                        "total_risk": 0.0250,
-                        "factor_risk_contribution": 0.0180,
-                        "specific_risk_contribution": 0.0070,
-                        "factor_risk_percentage": 72.0
-                    }
-                },
-                "contributions": {
-                    "by_asset": {"CA": 120.0, "OVL": 80.0, "IG": 60.0, "EQLIKE": 40.0},
-                    "by_factor": {"Market": 100.0, "Size": 50.0, "Value": 30.0, "Momentum": 20.0}
-                },
-                "exposures": {
-                    "factor_exposures": {"Market": 0.95, "Size": 0.15, "Value": -0.05, "Momentum": 0.25}
-                }
-            },
-            "benchmark": {
-                "core_metrics": {
-                    component: {
-                        "total_risk": 0.0220,
-                        "factor_risk_contribution": 0.0160,
-                        "specific_risk_contribution": 0.0060,
-                        "factor_risk_percentage": 73.0
-                    }
-                }
-            },
-            "active": {
-                "core_metrics": {
-                    component: {
-                        "total_risk": 0.0080,
-                        "factor_risk_contribution": 0.0050,
-                        "specific_risk_contribution": 0.0030,
-                        "factor_risk_percentage": 62.5
-                    }
-                },
-                "contributions": {
-                    "by_asset": {"CA": -20.0, "OVL": 15.0, "IG": -10.0, "EQLIKE": 15.0},
-                    "by_factor": {"Market": 10.0, "Size": -5.0, "Value": 20.0, "Momentum": -10.0}
-                },
-                "exposures": {
-                    "factor_exposures": {"Market": 0.05, "Size": -0.10, "Value": 0.15, "Momentum": -0.05}
-                }
-            },
-            "time_series": {
-                "currency": "USD",
-                "metadata": {
-                    "start_date": "2023-01-01",
-                    "end_date": "2024-12-31"
-                },
-                "portfolio_returns": {
-                    component: [0.01, 0.02, -0.01, 0.015, 0.005] * 12  # Mock 60 periods
-                },
-                "benchmark_returns": {
-                    component: [0.008, 0.018, -0.008, 0.012, 0.003] * 12
-                },
-                "active_returns": {
-                    component: [0.002, 0.002, -0.002, 0.003, 0.002] * 12
-                },
-                "factor_returns": {
-                    "Market": [0.012, 0.015, -0.010, 0.008, 0.005] * 12,
-                    "Size": [0.005, -0.002, 0.008, 0.003, -0.001] * 12,
-                    "Value": [0.008, 0.010, -0.005, 0.012, 0.007] * 12,
-                    "Momentum": [-0.003, 0.005, 0.002, -0.008, 0.004] * 12
-                },
-                "correlations": {},
-                "statistics": {}
-            },
-            "matrices": {},
-            "validation": {
-                "checks": {
-                    "passes": True,
-                    "asset_sum_check": True,
-                    "factor_specific_sum_check": True
-                },
-                "summary": "All validation checks passed"
+            # Add metadata
+            analysis_result['metadata'] = {
+                'analysis_type': 'hierarchical_factor_risk',
+                'root_component': root_component_id,
+                'factor_count': self.factor_returns.shape[1],
+                'component_count': len(self.portfolio_graph.components),
+                'analysis_timestamp': datetime.now().isoformat(),
+                'include_time_series': include_time_series,
+                'schema_type': str(type(risk_schema).__name__)
             }
-        }
+            
+            # Cache the result
+            self.analysis_cache[cache_key] = analysis_result
+            self.current_analysis_results = analysis_result
+            
+            logger.info(f"Risk analysis completed successfully for {root_component_id}")
+            return analysis_result
+            
+        except Exception as e:
+            error_msg = f"Risk analysis failed: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return self._create_error_result(error_msg)
     
-    def get_cache_info(self) -> Dict[str, Any]:
+    def _convert_schema_to_maverick_format(self, 
+                                          risk_schema,
+                                          root_component_id: str,
+                                          include_time_series: bool) -> Dict[str, Any]:
         """
-        Get information about cached data files.
+        Convert RiskResultSchema to Maverick UI format.
         
+        Args:
+            risk_schema: RiskResultSchema from PortfolioRiskAnalyzer
+            root_component_id: Root component ID
+            include_time_series: Whether time series data was included
+            
         Returns:
-            Dictionary with cache file information
+            Dictionary in Maverick UI format
         """
-        cache_files = []
+        try:
+            result = {
+                'success': True,
+                'root_component': root_component_id,
+                'risk_decomposition': {},
+                'hierarchy': {},
+                'validation': {},
+                'time_series': {},
+                'factor_analysis': {}
+            }
+            
+            # Extract core risk metrics
+            if hasattr(risk_schema, 'core_metrics'):
+                core_metrics = risk_schema.core_metrics
+                result['risk_decomposition'] = {
+                    'total_risk': getattr(core_metrics, 'total_risk', 0.0),
+                    'factor_risk_contribution': getattr(core_metrics, 'factor_risk_contribution', 0.0),
+                    'specific_risk_contribution': getattr(core_metrics, 'specific_risk_contribution', 0.0),
+                    'factor_risk_percentage': (
+                        getattr(core_metrics, 'factor_risk_contribution', 0.0) / 
+                        max(getattr(core_metrics, 'total_risk', 1e-10), 1e-10) * 100
+                    ),
+                    'specific_risk_percentage': (
+                        getattr(core_metrics, 'specific_risk_contribution', 0.0) / 
+                        max(getattr(core_metrics, 'total_risk', 1e-10), 1e-10) * 100
+                    )
+                }
+            
+            # Extract factor contributions
+            if hasattr(risk_schema, 'factor_contributions'):
+                result['factor_analysis']['contributions'] = dict(risk_schema.factor_contributions)
+            
+            # Extract asset contributions
+            if hasattr(risk_schema, 'asset_contributions'):
+                result['factor_analysis']['asset_contributions'] = dict(risk_schema.asset_contributions)
+            
+            # Extract hierarchy data if available
+            if hasattr(risk_schema, 'hierarchy') and risk_schema.hierarchy:
+                hierarchy_data = risk_schema.hierarchy
+                result['hierarchy'] = {
+                    'root_component': getattr(hierarchy_data, 'root_component', root_component_id),
+                    'component_metadata': getattr(hierarchy_data, 'component_metadata', {}),
+                    'adjacency_list': getattr(hierarchy_data, 'adjacency_list', {}),
+                    'component_relationships': getattr(hierarchy_data, 'component_relationships', {})
+                }
+            
+            # Extract time series data if available
+            if include_time_series and hasattr(risk_schema, 'time_series'):
+                time_series_data = risk_schema.time_series
+                
+                result['time_series'] = {
+                    'dates': getattr(time_series_data, 'dates', []),
+                    'portfolio_returns': getattr(time_series_data, 'portfolio_returns', {}),
+                    'benchmark_returns': getattr(time_series_data, 'benchmark_returns', {}),
+                    'factor_returns': getattr(time_series_data, 'factor_returns', {}),
+                    'metadata': {
+                        'start_date': getattr(time_series_data, 'dates', [None])[0] if getattr(time_series_data, 'dates', []) else None,
+                        'end_date': getattr(time_series_data, 'dates', [None, None])[-1] if getattr(time_series_data, 'dates', []) else None,
+                        'frequency': 'B',  # Business daily
+                        'currency': 'USD'
+                    }
+                }
+            
+            # Extract component-level analysis if available
+            if hasattr(risk_schema, 'data') and hasattr(risk_schema.data, 'component_risk_analysis'):
+                component_analysis = risk_schema.data.component_risk_analysis
+                
+                result['component_analysis'] = {}
+                for component_id, lenses in component_analysis.items():
+                    result['component_analysis'][component_id] = {}
+                    
+                    for lens, analysis_data in lenses.items():
+                        result['component_analysis'][component_id][lens] = {
+                            'total_risk': analysis_data.get('total_risk', 0.0),
+                            'factor_risk_contribution': analysis_data.get('factor_risk_contribution', 0.0),
+                            'specific_risk_contribution': analysis_data.get('specific_risk_contribution', 0.0),
+                            'factor_contributions': analysis_data.get('factor_contributions', {}),
+                            'asset_contributions': analysis_data.get('asset_contributions', {}),
+                            'validation': {
+                                'euler_identity_check': analysis_data.get('euler_identity_check', False),
+                                'validation_summary': analysis_data.get('validation_summary', '')
+                            }
+                        }
+            
+            # Extract validation results
+            if hasattr(risk_schema, 'validation'):
+                result['validation'] = {
+                    'passes': getattr(risk_schema.validation, 'overall_success', True),
+                    'checks': getattr(risk_schema.validation, 'validation_results', {}),
+                    'details': getattr(risk_schema.validation, 'details', {})
+                }
+            
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Failed to convert schema to Maverick format: {e}")
+            return self._create_error_result(f"Schema conversion failed: {str(e)}")
+    
+    def get_component_risk_analysis(self, component_id: str, lens: str = 'portfolio') -> Dict[str, Any]:
+        """
+        Get risk analysis for a specific component and lens.
         
-        if os.path.exists(self.cache_dir):
-            for filename in os.listdir(self.cache_dir):
-                if filename.endswith('.pkl'):
-                    filepath = os.path.join(self.cache_dir, filename)
-                    stat = os.stat(filepath)
-                    cache_files.append({
-                        'filename': filename,
-                        'size_mb': stat.st_size / (1024 * 1024),
-                        'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                        'component': filename.replace('risk_data_', '').replace('schema_', '').replace('.pkl', '')
-                    })
+        Args:
+            component_id: Component identifier
+            lens: Analysis lens ('portfolio', 'benchmark', 'active')
+            
+        Returns:
+            Component-specific risk analysis
+        """
+        if not self.current_analysis_results:
+            return self._create_error_result("No analysis results available")
+        
+        try:
+            component_analysis = self.current_analysis_results.get('component_analysis', {})
+            
+            if component_id in component_analysis:
+                if lens in component_analysis[component_id]:
+                    return {
+                        'success': True,
+                        'component_id': component_id,
+                        'lens': lens,
+                        'analysis': component_analysis[component_id][lens]
+                    }
+            
+            return self._create_error_result(f"No {lens} analysis found for component {component_id}")
+            
+        except Exception as e:
+            return self._create_error_result(f"Failed to get component analysis: {str(e)}")
+    
+    def get_factor_analysis(self) -> Dict[str, Any]:
+        """Get factor-level analysis results."""
+        if not self.current_analysis_results:
+            return self._create_error_result("No analysis results available")
         
         return {
-            'cache_dir': self.cache_dir,
-            'cache_files': cache_files,
-            'total_files': len(cache_files),
-            'spark_available': SPARK_AVAILABLE
+            'success': True,
+            'factor_analysis': self.current_analysis_results.get('factor_analysis', {}),
+            'factors': list(self.factor_returns.columns) if self.factor_returns is not None else []
         }
+    
+    def get_time_series_data(self) -> Dict[str, Any]:
+        """Get time series data from current analysis."""
+        if not self.current_analysis_results:
+            return self._create_error_result("No analysis results available")
+        
+        return {
+            'success': True,
+            'time_series': self.current_analysis_results.get('time_series', {}),
+            'metadata': self.current_analysis_results.get('metadata', {})
+        }
+    
+    def get_hierarchy_structure(self) -> Dict[str, Any]:
+        """Get portfolio hierarchy structure from current analysis."""
+        if not self.current_analysis_results:
+            return self._create_error_result("No analysis results available")
+        
+        return {
+            'success': True,
+            'hierarchy': self.current_analysis_results.get('hierarchy', {}),
+            'components': list(self.portfolio_graph.components.keys()) if self.portfolio_graph else []
+        }
+    
+    def get_available_lenses(self, component_id: str) -> List[str]:
+        """Get available analysis lenses for a component."""
+        if not self.current_analysis_results:
+            return []
+        
+        component_analysis = self.current_analysis_results.get('component_analysis', {})
+        if component_id in component_analysis:
+            return list(component_analysis[component_id].keys())
+        
+        return ['portfolio', 'benchmark', 'active']  # Default lenses
+    
+    def validate_analysis_results(self) -> Dict[str, Any]:
+        """Validate the current analysis results."""
+        if not self.current_analysis_results:
+            return {'valid': False, 'message': 'No analysis results available'}
+        
+        validation = self.current_analysis_results.get('validation', {})
+        
+        return {
+            'valid': validation.get('passes', False),
+            'checks': validation.get('checks', {}),
+            'details': validation.get('details', {}),
+            'summary': 'Analysis validation completed'
+        }
+    
+    def _create_error_result(self, error_message: str) -> Dict[str, Any]:
+        """Create standardized error result."""
+        return {
+            'success': False,
+            'error': error_message,
+            'timestamp': datetime.now().isoformat()
+        }
+    
+    def clear_cache(self):
+        """Clear analysis cache."""
+        self.analysis_cache.clear()
+        self.current_analysis_results = None
+        logger.info("Risk analysis cache cleared")
+    
+    def get_service_status(self) -> Dict[str, Any]:
+        """Get current service status."""
+        return {
+            'portfolio_graph_loaded': self.portfolio_graph is not None,
+            'factor_returns_loaded': self.factor_returns is not None,
+            'risk_analyzer_available': self.risk_analyzer is not None,
+            'ready_for_analysis': self.is_ready_for_analysis(),
+            'current_analysis_available': self.current_analysis_results is not None,
+            'cache_size': len(self.analysis_cache),
+            'portfolio_components': len(self.portfolio_graph.components) if self.portfolio_graph else 0,
+            'factor_count': self.factor_returns.shape[1] if self.factor_returns is not None else 0
+        }
+
+
+# Factory function for easy instantiation
+def create_risk_service() -> MaverickRiskService:
+    """Create a new Maverick risk service instance."""
+    return MaverickRiskService()

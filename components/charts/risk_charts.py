@@ -76,7 +76,7 @@ def render_top_contributors_chart(
 def render_treemap_hierarchy(data_loader, sidebar_state) -> None:
     """Render treemap of hierarchy footprint for current node"""
     
-    st.subheader("🌳 Hierarchy Footprint")
+    st.subheader("Hierarchy Footprint")
     
     current_node = sidebar_state.selected_node
     lens = sidebar_state.lens

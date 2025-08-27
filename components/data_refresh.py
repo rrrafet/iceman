@@ -24,83 +24,113 @@ def render_data_refresh_controls(data_loader) -> bool:
     
     # Show data source status
     if data_loader.has_risk_service():
-        st.success("✅ RiskAnalysisService available")
+        st.success("✅ Risk Analysis Service available")
+        
+        # Show current status
+        try:
+            risk_status = data_loader.get_risk_analysis_status()
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Portfolio Components", risk_status.get('portfolio_components', 0))
+            with col2:
+                st.metric("Risk Factors", risk_status.get('factor_count', 0))
+                
+            if risk_status.get('analysis_completed', False):
+                st.info("✅ Risk analysis data available")
+            elif risk_status.get('ready_for_analysis', False):
+                st.warning("⏳ Ready to run analysis")
+            else:
+                st.warning("⚠️ Waiting for portfolio & risk model")
+                
+        except Exception as e:
+            st.error(f"Error getting risk status: {e}")
         
         # Refresh button
-        if st.button("🔄 Refresh Risk Data", key="refresh_risk_data"):
-            with st.spinner("Refreshing risk analysis data..."):
+        if st.button("🔄 Refresh Configuration", key="refresh_config_data"):
+            with st.spinner("Refreshing configuration data..."):
                 try:
-                    data_loader.refresh_data("TOTAL")
-                    st.success("✅ Data refreshed successfully!")
+                    data_loader.refresh_data()
+                    st.success("✅ Configuration refreshed!")
                     data_refreshed = True
-                    # Trigger app rerun to update UI
                     st.rerun()
                 except Exception as e:
-                    st.error(f"❌ Error refreshing data: {e}")
+                    st.error(f"❌ Error refreshing: {e}")
         
-        # Cache management
-        with st.expander("💾 Cache Management"):
-            cache_info = data_loader.get_cache_info()
-            
-            st.write("**Cache Directory:**")
-            st.code(cache_info.get('cache_dir', 'N/A'))
-            
-            cache_files = cache_info.get('cache_files', [])
-            if cache_files:
-                st.write(f"**Cached Files:** {len(cache_files)}")
-                
-                for file_info in cache_files:
-                    col1, col2, col3 = st.columns([2, 1, 1])
-                    with col1:
-                        st.text(file_info['filename'])
-                    with col2:
-                        st.text(f"{file_info['size_mb']:.2f} MB")
-                    with col3:
-                        st.text(file_info['modified'][:10])  # Show date only
+        # Clear cache button
+        if st.button("🗑️ Clear Risk Analysis Cache", key="clear_risk_cache"):
+            try:
+                if data_loader.risk_service:
+                    data_loader.risk_service.clear_cache()
+                    st.success("✅ Cache cleared!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error clearing cache: {e}")
+        
+        # Cache info
+        with st.expander("💾 Generated Data Files"):
+            data_dir = os.path.join(os.path.dirname(__file__), '..', 'config', 'data')
+            if os.path.exists(data_dir):
+                files = [f for f in os.listdir(data_dir) if f.endswith('.parquet')]
+                if files:
+                    st.write(f"**Generated Files:** {len(files)}")
+                    for filename in files:
+                        filepath = os.path.join(data_dir, filename)
+                        if os.path.exists(filepath):
+                            size_mb = os.path.getsize(filepath) / (1024*1024)
+                            st.text(f"{filename} ({size_mb:.2f} MB)")
+                else:
+                    st.info("No data files found")
             else:
-                st.info("No cached files found")
+                st.warning("Data directory not found")
         
-        # Upload schema option
-        with st.expander("📤 Upload Schema from Notebook"):
+        # Integration info
+        with st.expander("📤 Integration with Notebooks"):
             st.markdown("""
-            **To upload a schema from your Jupyter notebook:**
+            **To integrate with Jupyter notebooks:**
             
-            1. In your notebook, run:
+            1. Generate portfolio data:
             ```python
-            schema = analyzer.get_comprehensive_schema("TOTAL", factor_returns=factor_returns)
-            data_loader.save_schema_to_cache(schema, "TOTAL")
+            cd config
+            python data_generator.py
             ```
             
-            2. Click refresh above to load the new data
+            2. Load portfolio in notebook:
+            ```python
+            from config.portfolio_loader import load_portfolio_from_config_name
+            result = load_portfolio_from_config_name('strategic_portfolio', 'config')
+            portfolio_graph = result['portfolio_graph']
+            factor_returns = result['factor_returns']
+            ```
+            
+            3. Run risk analysis:
+            ```python
+            from spark.portfolio.risk_analyzer import PortfolioRiskAnalyzer
+            analyzer = PortfolioRiskAnalyzer(portfolio_graph)
+            schema = analyzer.get_risk_summary('TOTAL', factor_returns)
+            ```
             """)
             
-            if st.button("📂 Open Cache Directory", key="open_cache_dir"):
-                cache_dir = cache_info.get('cache_dir', '')
-                if os.path.exists(cache_dir):
-                    st.info(f"Cache directory: {cache_dir}")
-                else:
-                    st.warning("Cache directory not found")
+            config_dir = os.path.join(os.path.dirname(__file__), '..', 'config')
+            if st.button("📂 Show Config Directory", key="show_config_dir"):
+                st.info(f"Configuration directory: {config_dir}")
     
     else:
-        st.warning("⚠️ RiskAnalysisService not available")
-        st.info("Using static data file or mock data")
+        st.warning("⚠️ Risk Analysis Service not available")
+        st.info("Check system configuration")
         
-        # Option to reinitialize with portfolio components
-        with st.expander("🔧 Enable Dynamic Risk Analysis"):
+        # Option to reinitialize
+        with st.expander("🔧 Troubleshooting"):
             st.markdown("""
-            **To enable dynamic risk analysis:**
+            **If risk analysis is not working:**
             
-            1. In your notebook, after creating portfolio_graph and factor_returns:
-            ```python
-            # Save components to cache for Streamlit to pick up
-            import joblib
-            joblib.dump({
-                'portfolio_graph': graph,
-                'factor_returns': factor_returns
-            }, 'spark-ui/apps/maverick/cache/portfolio_components.pkl')
-            ```
+            1. Check that all dependencies are installed
+            2. Verify portfolio configuration is loaded
+            3. Verify risk model is selected
+            4. Try restarting the Streamlit app
             
-            2. Restart the Streamlit app to load components
+            **Data files should be in:**
+            - `config/data/portfolio.parquet`
+            - `config/data/factor_returns_*.parquet`
             """)
     
     return data_refreshed

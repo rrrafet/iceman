@@ -25,7 +25,7 @@ def render_overview_tab(data_loader, sidebar_state):
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("🔥 Top Asset Contributors")
+        st.subheader("Top Asset Contributors")
         render_top_contributors_chart(
             data_loader, 
             sidebar_state, 
@@ -33,7 +33,7 @@ def render_overview_tab(data_loader, sidebar_state):
             title="Top Asset Contributors"
         )
         
-        st.subheader("⚡ Top Factor Contributors") 
+        st.subheader("Top Factor Contributors") 
         render_top_contributors_chart(
             data_loader,
             sidebar_state,
@@ -52,7 +52,7 @@ def render_overview_tab(data_loader, sidebar_state):
     
     # Additional insights section
     st.divider()
-    st.subheader("📈 Summary Insights")
+    st.subheader("Summary Insights")
     
     # Get component-specific summary metrics 
     # Try hierarchical data first, fallback to legacy structure
