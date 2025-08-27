@@ -12,8 +12,8 @@ builder_settings:
 
 # Data source configuration
 data_sources:
-  portfolio_data: "config/data/portfolio.parquet"
-  factor_returns: "config/data/factor_returns.parquet"
+  portfolio_data: "data/portfolio.parquet"
+  factor_returns: "data/factor_returns.parquet"
 
 # DataFrame column mappings
 data_structure:
