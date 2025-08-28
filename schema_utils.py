@@ -1,645 +1,469 @@
 """
-Risk Schema Utilities
-=====================
+Schema Utilities - Helper functions for risk data processing and validation.
 
-Utility functions for working with the unified risk result schema,
-including advanced validation, migration helpers, and format conversion.
+This module provides utility functions for converting, processing, and validating
+risk data extracted from portfolio visitors and decomposers.
 """
 
+from typing import Dict, List, Any, Optional, Union, Tuple
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Any, Optional, Union, Tuple
 import logging
-from .schema import RiskResultSchema, AnalysisType, ValidationLevel
 
 logger = logging.getLogger(__name__)
 
 
-class SchemaValidator:
-    """Advanced validation utilities for risk result schemas."""
-    
-    @staticmethod
-    def validate_numerical_consistency(schema: RiskResultSchema, tolerance: float = 1e-6) -> Dict[str, Any]:
-        """
-        Perform advanced numerical consistency checks on risk schema.
-        
-        Parameters
-        ----------
-        schema : RiskResultSchema
-            Schema to validate
-        tolerance : float, default 1e-6
-            Numerical tolerance for validation checks
-            
-        Returns
-        -------
-        dict
-            Detailed validation results
-        """
-        results = {}
-        data = schema.data
-        
-        # Try to get core metrics from lens-specific structure (portfolio lens by default)
-        portfolio_lens = data.get("hierarchical_risk_data", {}).get("TOTAL", {}).get("portfolio", {})
-        core_metrics = portfolio_lens.get("decomposer_results", {})
-        
-        # Euler identity validation
-        if all(k in core_metrics and core_metrics[k] is not None for k in ["total_risk", "factor_risk_contribution", "specific_risk_contribution"]):
-            total_risk = core_metrics["total_risk"]
-            factor_risk = core_metrics["factor_risk_contribution"]
-            specific_risk = core_metrics["specific_risk_contribution"]
-            sum_risk = factor_risk + specific_risk
-            
-            results["euler_identity"] = {
-                "passes": abs(sum_risk - total_risk) < tolerance,
-                "difference": abs(sum_risk - total_risk),
-                "expected": total_risk,
-                "actual": sum_risk,
-                "tolerance": tolerance
-            }
-        
-        # Contribution sum validation 
-        asset_contributions = portfolio_lens.get("asset_contributions", {})
-        if asset_contributions and core_metrics.get("total_risk") is not None:
-            contrib_sum = sum(asset_contributions.values())
-            total_risk = core_metrics["total_risk"]
-            
-            results["asset_contribution_sum"] = {
-                "passes": abs(contrib_sum - total_risk) < tolerance,
-                "difference": abs(contrib_sum - total_risk),
-                "expected": total_risk,
-                "actual": contrib_sum,
-                "tolerance": tolerance
-            }
-        
-        # Factor contribution sum validation
-        factor_contributions = portfolio_lens.get("factor_contributions", {})
-        if factor_contributions and core_metrics.get("factor_risk_contribution") is not None:
-            factor_sum = sum(factor_contributions.values())
-            expected_factor_risk = core_metrics["factor_risk_contribution"]
-            
-            results["factor_contribution_sum"] = {
-                "passes": abs(factor_sum - expected_factor_risk) < tolerance,
-                "difference": abs(factor_sum - expected_factor_risk),
-                "expected": expected_factor_risk,
-                "actual": factor_sum,
-                "tolerance": tolerance
-            }
-        
-        # Percentage validation
-        if core_metrics.get("factor_risk_percentage") is not None and core_metrics.get("specific_risk_percentage") is not None:
-            percentage_sum = core_metrics["factor_risk_percentage"] + core_metrics["specific_risk_percentage"]
-            
-            results["percentage_sum"] = {
-                "passes": abs(percentage_sum - 100.0) < tolerance * 100,
-                "difference": abs(percentage_sum - 100.0),
-                "expected": 100.0,
-                "actual": percentage_sum,
-                "tolerance": tolerance * 100
-            }
-        
-        # Overall validation
-        all_passed = all(result.get("passes", True) for result in results.values())
-        results["overall_numerical"] = {
-            "passes": all_passed,
-            "total_checks": len(results),
-            "passed_checks": sum(1 for r in results.values() if r.get("passes", True))
-        }
-        
-        return results
-    
-    @staticmethod
-    def validate_dimension_consistency(schema: RiskResultSchema) -> Dict[str, Any]:
-        """
-        Validate dimensional consistency across arrays and named dictionaries.
-        
-        Parameters
-        ----------
-        schema : RiskResultSchema
-            Schema to validate
-            
-        Returns
-        -------
-        dict
-            Dimension validation results
-        """
-        results = {}
-        data = schema.data
-        
-        # Get identifiers from schema 
-        n_assets = len(schema.asset_names)
-        n_factors = len(schema.factor_names)
-        
-        # Get contributions from lens-specific structure
-        portfolio_lens = data.get("hierarchical_risk_data", {}).get("TOTAL", {}).get("portfolio", {})
-        asset_contributions = portfolio_lens.get("asset_contributions", {})
-        if asset_contributions:
-            actual_assets = len(asset_contributions)
-            results["asset_dimensions"] = {
-                "passes": actual_assets == n_assets or n_assets == 0,
-                "expected": n_assets,
-                "actual": actual_assets,
-                "message": f"Asset contributions: expected {n_assets}, got {actual_assets}"
-            }
-        
-        # Factor dimension checks
-        factor_contributions = portfolio_lens.get("factor_contributions", {})
-        if factor_contributions:
-            actual_factors = len(factor_contributions)
-            results["factor_dimensions"] = {
-                "passes": actual_factors == n_factors or n_factors == 0,
-                "expected": n_factors,
-                "actual": actual_factors,
-                "message": f"Factor contributions: expected {n_factors}, got {actual_factors}"
-            }
-        
-        # Factor exposures dimensions
-        factor_exposures = portfolio_lens.get("factor_exposures", {})
-        if factor_exposures:
-            actual_exposures = len(factor_exposures)
-            results["exposure_dimensions"] = {
-                "passes": actual_exposures == n_factors or n_factors == 0,
-                "expected": n_factors,
-                "actual": actual_exposures,
-                "message": f"Factor exposures: expected {n_factors}, got {actual_exposures}"
-            }
-        
-        # Factor loadings dimensions - check matrices section
-        matrices = data.get("matrices", {})
-        factor_loadings = matrices.get("factor_loadings", {})
-        if factor_loadings:
-            actual_assets_in_loadings = len(factor_loadings)
-            results["loadings_asset_dimensions"] = {
-                "passes": actual_assets_in_loadings == n_assets or n_assets == 0,
-                "expected": n_assets,
-                "actual": actual_assets_in_loadings,
-                "message": f"Factor loadings assets: expected {n_assets}, got {actual_assets_in_loadings}"
-            }
-            
-            # Check factor dimensions within loadings
-            if factor_loadings:
-                first_asset_loadings = next(iter(factor_loadings.values()))
-                actual_factors_in_loadings = len(first_asset_loadings)
-                results["loadings_factor_dimensions"] = {
-                    "passes": actual_factors_in_loadings == n_factors or n_factors == 0,
-                    "expected": n_factors,
-                    "actual": actual_factors_in_loadings,
-                    "message": f"Factor loadings factors: expected {n_factors}, got {actual_factors_in_loadings}"
-                }
-        
-        # Overall dimension validation
-        all_passed = all(result.get("passes", True) for result in results.values())
-        results["overall_dimensions"] = {
-            "passes": all_passed,
-            "total_checks": len(results),
-            "passed_checks": sum(1 for r in results.values() if r.get("passes", True))
-        }
-        
-        return results
-
-
-class SchemaConverter:
-    """Conversion utilities between different risk result formats."""
-    
-    @staticmethod
-    def decomposer_to_schema(decomposer_result: Dict[str, Any]) -> RiskResultSchema:
-        """
-        Convert RiskDecomposer.to_dict() result to unified schema.
-        
-        Parameters
-        ----------
-        decomposer_result : dict
-            Result from RiskDecomposer.to_dict()
-            
-        Returns
-        -------
-        RiskResultSchema
-            Unified schema instance
-        """
-        # Extract metadata for schema creation
-        metadata = decomposer_result.get("metadata", {})
-        core_metrics = decomposer_result.get("core_metrics", {})
-        
-        # Create schema with extracted metadata
-        schema = RiskResultSchema(
-            analysis_type=metadata.get("analysis_type", "portfolio"),
-            asset_names=metadata.get("asset_names", []),
-            factor_names=metadata.get("factor_names", [])
-        )
-        
-        # Set core metrics using lens-specific method
-        if "portfolio_volatility" in core_metrics:
-            schema.set_lens_core_metrics(
-                lens='portfolio',
-                total_risk=core_metrics["portfolio_volatility"],
-                factor_risk_contribution=core_metrics.get("factor_risk_contribution", 0.0),
-                specific_risk_contribution=core_metrics.get("specific_risk_contribution", 0.0)
-            )
-        
-        # Set contributions from named_contributions
-        named_contrib = decomposer_result.get("named_contributions", {})
-        if "assets" in named_contrib:
-            asset_contrib = named_contrib["assets"].get("total_contributions", {})
-            if asset_contrib:
-                schema.set_lens_asset_contributions('portfolio', asset_contrib)
-        
-        if "factors" in named_contrib:
-            factor_contrib = named_contrib["factors"].get("contributions", {})
-            if factor_contrib:
-                schema.set_lens_factor_contributions('portfolio', factor_contrib)
-            
-            factor_exposures = named_contrib["factors"].get("exposures", {})
-            if factor_exposures:
-                schema.set_lens_factor_exposures('portfolio', factor_exposures)
-        
-        # Set weights if available
-        weights_data = decomposer_result.get("weights", {})
-        if weights_data:
-            if "portfolio_weights" in weights_data:
-                schema._data['weights']['portfolio_weights'] = weights_data["portfolio_weights"].copy()
-            if "benchmark_weights" in weights_data:
-                schema._data['weights']['benchmark_weights'] = weights_data["benchmark_weights"].copy()
-            if "active_weights" in weights_data:
-                schema._data['weights']['active_weights'] = weights_data["active_weights"].copy()
-        
-        # Set validation results
-        if "validation" in decomposer_result:
-            schema.set_validation_results(decomposer_result["validation"])
-        
-        return schema
-    
-    @staticmethod
-    def strategy_to_schema(strategy_result: Dict[str, Any]) -> RiskResultSchema:
-        """
-        Convert Strategy.analyze() result to unified schema.
-        
-        Parameters
-        ----------
-        strategy_result : dict
-            Result from risk analysis strategy
-            
-        Returns
-        -------
-        RiskResultSchema
-            Unified schema instance
-        """
-        # Create schema from strategy result
-        schema = RiskResultSchema(
-            analysis_type=strategy_result.get("analysis_type", "portfolio"),
-            asset_names=strategy_result.get("asset_names", []),
-            factor_names=strategy_result.get("factor_names", [])
-        )
-        
-        # Set core metrics using lens-specific method
-        if "portfolio_volatility" in strategy_result:
-            schema.set_lens_core_metrics(
-                lens='portfolio',
-                total_risk=strategy_result["portfolio_volatility"],
-                factor_risk_contribution=strategy_result.get("factor_risk_contribution", 0.0),
-                specific_risk_contribution=strategy_result.get("specific_risk_contribution", 0.0)
-            )
-        
-        # Set contributions using lens-specific methods
-        if "asset_total_contributions" in strategy_result:
-            schema.set_lens_asset_contributions('portfolio', strategy_result["asset_total_contributions"])
-        
-        if "factor_contributions" in strategy_result:
-            schema.set_lens_factor_contributions('portfolio', strategy_result["factor_contributions"])
-        
-        # Set exposures using lens-specific method
-        if "portfolio_factor_exposure" in strategy_result:
-            schema.set_lens_factor_exposures('portfolio', strategy_result["portfolio_factor_exposure"])
-        
-        # Set weights via schema's weights section
-        if "portfolio_weights" in strategy_result:
-            schema._data['weights']['portfolio_weights'] = strategy_result["portfolio_weights"].copy()
-        if "benchmark_weights" in strategy_result:
-            schema._data['weights']['benchmark_weights'] = strategy_result["benchmark_weights"].copy()
-        if "active_weights" in strategy_result:
-            schema._data['weights']['active_weights'] = strategy_result["active_weights"].copy()
-        
-        # Set validation results
-        if "validation" in strategy_result:
-            schema.set_validation_results(strategy_result["validation"])
-        
-        return schema
-    
-    @staticmethod
-    def portfolio_summary_to_schema(
-        summary: Dict[str, Any],
-        analysis_type: str = "hierarchical"
-    ) -> RiskResultSchema:
-        """
-        Convert portfolio risk summary to unified schema.
-        
-        Parameters
-        ----------
-        summary : dict
-            Portfolio risk summary dictionary
-        analysis_type : str, default "hierarchical"
-            Type of analysis
-            
-        Returns
-        -------
-        RiskResultSchema
-            Unified schema instance
-        """
-        schema = RiskResultSchema(
-            analysis_type=analysis_type,
-            asset_names=summary.get("component_names", []),
-            factor_names=summary.get("factor_names", [])
-        )
-        
-        # Set core metrics if available
-        if "portfolio_volatility" in summary:
-            schema.set_lens_core_metrics(
-                lens='portfolio',
-                total_risk=summary["portfolio_volatility"],
-                factor_risk_contribution=summary.get("factor_risk_contribution", 0.0),
-                specific_risk_contribution=summary.get("specific_risk_contribution", 0.0)
-            )
-        
-        return schema
-    
-    @staticmethod
-    def merge_schemas(schemas: List[RiskResultSchema]) -> RiskResultSchema:
-        """
-        Merge multiple schemas into a consolidated view.
-        
-        Parameters
-        ----------
-        schemas : list of RiskResultSchema
-            Schemas to merge
-            
-        Returns
-        -------
-        RiskResultSchema
-            Merged schema
-        """
-        if not schemas:
-            return RiskResultSchema("portfolio")
-        
-        # Use first schema as base
-        base_schema = schemas[0]
-        merged = RiskResultSchema(
-            analysis_type="hierarchical",  # Merged is inherently hierarchical
-            asset_names=base_schema.asset_names.copy(),
-            factor_names=base_schema.factor_names.copy()
-        )
-        
-        # Aggregate core metrics (simple sum for now)
-        total_risk = 0.0
-        total_factor_risk = 0.0
-        total_specific_risk = 0.0
-        
-        for schema in schemas:
-            data = schema.data
-            core = data["core_metrics"]
-            if core["total_risk"] is not None:
-                total_risk += core["total_risk"]
-            if core["factor_risk_contribution"] is not None:
-                total_factor_risk += core["factor_risk_contribution"]
-            if core["specific_risk_contribution"] is not None:
-                total_specific_risk += core["specific_risk_contribution"]
-        
-        if total_risk > 0:
-            merged.set_lens_core_metrics('portfolio', total_risk, total_factor_risk, total_specific_risk)
-        
-        # Merge contributions (simple aggregation)
-        merged_asset_contrib = {}
-        merged_factor_contrib = {}
-        
-        for schema in schemas:
-            data = schema.data
-            
-            # Aggregate asset contributions
-            for asset, contrib in data["contributions"]["by_asset"].items():
-                merged_asset_contrib[asset] = merged_asset_contrib.get(asset, 0.0) + contrib
-            
-            # Aggregate factor contributions
-            for factor, contrib in data["contributions"]["by_factor"].items():
-                merged_factor_contrib[factor] = merged_factor_contrib.get(factor, 0.0) + contrib
-        
-        if merged_asset_contrib:
-            merged.set_lens_asset_contributions('portfolio', merged_asset_contrib)
-        if merged_factor_contrib:
-            merged.set_lens_factor_contributions('portfolio', merged_factor_contrib)
-        
-        # Add details about merge
-        merged.add_detail("merged_from", [str(schema) for schema in schemas])
-        merged.add_detail("merge_timestamp", pd.Timestamp.now().isoformat())
-        
-        return merged
-
-
-class SchemaMigrator:
-    """Migration utilities for transitioning to unified schema."""
-    
-    @staticmethod
-    def create_migration_report(old_format: Dict[str, Any], new_schema: RiskResultSchema) -> Dict[str, Any]:
-        """
-        Create migration report comparing old and new formats.
-        
-        Parameters
-        ----------
-        old_format : dict
-            Original format dictionary
-        new_schema : RiskResultSchema
-            Converted unified schema
-            
-        Returns
-        -------
-        dict
-            Migration report
-        """
-        report = {
-            "migration_timestamp": pd.Timestamp.now().isoformat(),
-            "old_format_keys": list(old_format.keys()),
-            "new_schema_sections": list(new_schema.data.keys()),
-            "data_preservation": {},
-            "improvements": []
-        }
-        
-        # Check data preservation
-        if "portfolio_volatility" in old_format:
-            old_value = old_format["portfolio_volatility"]
-            new_value = new_schema.data["core_metrics"]["total_risk"]
-            report["data_preservation"]["portfolio_volatility"] = {
-                "preserved": abs(old_value - new_value) < 1e-10 if new_value is not None else False,
-                "old_value": old_value,
-                "new_value": new_value
-            }
-        
-        # Document improvements
-        if new_schema.data["exposures"]["factor_loadings"]:
-            report["improvements"].append("Added named factor loadings mapping")
-        
-        if new_schema.data["contributions"]["by_asset"]:
-            report["improvements"].append("Added named asset contributions")
-        
-        if new_schema.data["validation"]["passes"]:
-            report["improvements"].append("Added comprehensive validation")
-        
-        return report
-    
-    @staticmethod
-    def batch_migrate_results(
-        results: List[Dict[str, Any]], 
-        source_format: str = "decomposer"
-    ) -> List[RiskResultSchema]:
-        """
-        Migrate multiple results to unified schema format.
-        
-        Parameters
-        ----------
-        results : list of dict
-            List of results in old format
-        source_format : str, default "decomposer"
-            Source format type ("decomposer", "strategy", "analyzer")
-            
-        Returns
-        -------
-        list of RiskResultSchema
-            Migrated schemas
-        """
-        migrated_schemas = []
-        
-        for i, result in enumerate(results):
-            try:
-                if source_format == "decomposer":
-                    schema = SchemaConverter.decomposer_to_schema(result)
-                elif source_format == "strategy":
-                    schema = SchemaConverter.strategy_to_schema(result)
-                else:
-                    # Generic conversion
-                    schema = RiskResultSchema("portfolio")
-                    if "portfolio_volatility" in result:
-                        schema.set_lens_core_metrics(
-                            lens='portfolio',
-                            total_risk=result["portfolio_volatility"],
-                            factor_risk_contribution=result.get("factor_risk_contribution", 0.0),
-                            specific_risk_contribution=result.get("specific_risk_contribution", 0.0)
-                        )
-                
-                migrated_schemas.append(schema)
-                
-            except Exception as e:
-                logger.warning(f"Failed to migrate result {i}: {e}")
-                # Create empty schema as fallback
-                migrated_schemas.append(RiskResultSchema("portfolio"))
-        
-        return migrated_schemas
-
-
-def validate_unified_schema(schema: RiskResultSchema, strict: bool = False) -> Tuple[bool, Dict[str, Any]]:
+def array_to_named_dict(
+    array: np.ndarray,
+    names: List[str],
+    fallback_prefix: str = "Item"
+) -> Dict[str, float]:
     """
-    Comprehensive validation of unified schema.
+    Convert numpy array to named dictionary using provided names.
     
     Parameters
     ----------
-    schema : RiskResultSchema
-        Schema to validate
-    strict : bool, default False
-        Whether to use strict validation mode
+    array : np.ndarray
+        Array to convert
+    names : List[str]
+        Names to use for dictionary keys
+    fallback_prefix : str, default "Item"
+        Prefix for fallback names if names list is insufficient
         
     Returns
     -------
-    tuple
-        (passes, validation_results) where passes is bool and validation_results is dict
+    Dict[str, float]
+        Named dictionary with array values
     """
-    all_results = {}
+    if array is None:
+        return {}
     
-    # Basic schema validation
-    basic_validation = schema.validate_comprehensive()
-    all_results["basic"] = basic_validation
+    array = np.asarray(array).flatten()
     
-    # Numerical consistency validation
-    numerical_validation = SchemaValidator.validate_numerical_consistency(schema)
-    all_results["numerical"] = numerical_validation
+    if len(array) == 0:
+        return {}
     
-    # Dimension consistency validation
-    dimension_validation = SchemaValidator.validate_dimension_consistency(schema)
-    all_results["dimensions"] = dimension_validation
+    # Ensure we have enough names
+    if len(names) < len(array):
+        # Extend names list with fallback names
+        additional_names = [f"{fallback_prefix}_{i+1}" for i in range(len(names), len(array))]
+        names = list(names) + additional_names
+        logger.warning(f"Insufficient names provided ({len(names)} names for {len(array)} array elements). "
+                      f"Using fallback names with prefix '{fallback_prefix}'")
     
-    # Overall validation result
-    basic_passes = basic_validation.get("overall", {}).get("passes", False)
-    numerical_passes = numerical_validation.get("overall_numerical", {}).get("passes", False)
-    dimension_passes = dimension_validation.get("overall_dimensions", {}).get("passes", False)
+    # Create dictionary
+    return {names[i]: float(array[i]) for i in range(len(array))}
+
+
+def matrix_to_nested_dict(
+    matrix: np.ndarray,
+    row_names: List[str],
+    col_names: List[str],
+    fallback_row_prefix: str = "Row",
+    fallback_col_prefix: str = "Col"
+) -> Dict[str, Dict[str, float]]:
+    """
+    Convert 2D numpy array to nested dictionary with named rows and columns.
     
-    if strict:
-        overall_passes = basic_passes and numerical_passes and dimension_passes
-    else:
-        # In non-strict mode, only basic validation must pass
-        overall_passes = basic_passes
+    Parameters
+    ----------
+    matrix : np.ndarray
+        2D array to convert
+    row_names : List[str]
+        Names for matrix rows
+    col_names : List[str]
+        Names for matrix columns
+    fallback_row_prefix : str, default "Row"
+        Prefix for fallback row names
+    fallback_col_prefix : str, default "Col"
+        Prefix for fallback column names
+        
+    Returns
+    -------
+    Dict[str, Dict[str, float]]
+        Nested dictionary with named rows and columns
+    """
+    if matrix is None:
+        return {}
     
-    all_results["overall"] = {
-        "passes": overall_passes,
-        "basic_passes": basic_passes,
-        "numerical_passes": numerical_passes,
-        "dimension_passes": dimension_passes,
-        "validation_mode": "strict" if strict else "moderate"
+    matrix = np.asarray(matrix)
+    
+    if matrix.size == 0:
+        return {}
+    
+    # Ensure matrix is 2D
+    if matrix.ndim == 1:
+        matrix = matrix.reshape(1, -1)
+    elif matrix.ndim > 2:
+        logger.warning(f"Matrix has {matrix.ndim} dimensions, flattening to 2D")
+        matrix = matrix.reshape(matrix.shape[0], -1)
+    
+    rows, cols = matrix.shape
+    
+    # Ensure we have enough names
+    if len(row_names) < rows:
+        additional_row_names = [f"{fallback_row_prefix}_{i+1}" for i in range(len(row_names), rows)]
+        row_names = list(row_names) + additional_row_names
+        logger.warning(f"Insufficient row names provided. Using fallback names with prefix '{fallback_row_prefix}'")
+    
+    if len(col_names) < cols:
+        additional_col_names = [f"{fallback_col_prefix}_{i+1}" for i in range(len(col_names), cols)]
+        col_names = list(col_names) + additional_col_names
+        logger.warning(f"Insufficient column names provided. Using fallback names with prefix '{fallback_col_prefix}'")
+    
+    # Create nested dictionary
+    return {
+        row_names[i]: {
+            col_names[j]: float(matrix[i, j]) for j in range(cols)
+        } for i in range(rows)
     }
-    
-    return overall_passes, all_results
 
 
-def create_schema_from_arrays(
-    total_risk: float,
-    factor_contributions: np.ndarray,
-    asset_contributions: np.ndarray,
-    factor_exposures: Optional[np.ndarray] = None,
-    factor_loadings: Optional[np.ndarray] = None,
-    asset_names: Optional[List[str]] = None,
-    factor_names: Optional[List[str]] = None,
-    analysis_type: str = "portfolio"
-) -> RiskResultSchema:
+def extract_property_safely(
+    obj: Any,
+    property_name: str,
+    default_value: Any = None,
+    log_errors: bool = True
+) -> Any:
     """
-    Convenience function to create schema from numpy arrays.
+    Safely extract a property from an object with error handling.
+    
+    Parameters
+    ----------
+    obj : Any
+        Object to extract property from
+    property_name : str
+        Name of property to extract
+    default_value : Any, optional
+        Default value if extraction fails
+    log_errors : bool, default True
+        Whether to log extraction errors
+        
+    Returns
+    -------
+    Any
+        Property value or default value
+    """
+    if obj is None:
+        return default_value
+    
+    try:
+        if hasattr(obj, property_name):
+            value = getattr(obj, property_name)
+            # Handle callable properties
+            if callable(value):
+                return value()
+            return value
+        else:
+            if log_errors:
+                logger.debug(f"Property '{property_name}' not found in object of type {type(obj).__name__}")
+            return default_value
+    except Exception as e:
+        if log_errors:
+            logger.warning(f"Error extracting property '{property_name}': {e}")
+        return default_value
+
+
+def validate_array_dimensions(
+    array: np.ndarray,
+    expected_shape: Optional[Tuple[int, ...]] = None,
+    min_dims: Optional[int] = None,
+    max_dims: Optional[int] = None,
+    name: str = "array"
+) -> Dict[str, Any]:
+    """
+    Validate array dimensions and properties.
+    
+    Parameters
+    ----------
+    array : np.ndarray
+        Array to validate
+    expected_shape : Tuple[int, ...], optional
+        Expected exact shape
+    min_dims : int, optional
+        Minimum number of dimensions
+    max_dims : int, optional
+        Maximum number of dimensions
+    name : str, default "array"
+        Name for logging purposes
+        
+    Returns
+    -------
+    Dict[str, Any]
+        Validation results
+    """
+    if array is None:
+        return {
+            'valid': False,
+            'issues': [f"{name} is None"],
+            'array_info': None
+        }
+    
+    issues = []
+    
+    array = np.asarray(array)
+    
+    # Check for finite values
+    if not np.all(np.isfinite(array)):
+        nan_count = np.sum(np.isnan(array))
+        inf_count = np.sum(np.isinf(array))
+        issues.append(f"{name} contains {nan_count} NaN and {inf_count} infinite values")
+    
+    # Check dimensions
+    if min_dims is not None and array.ndim < min_dims:
+        issues.append(f"{name} has {array.ndim} dimensions, minimum required: {min_dims}")
+    
+    if max_dims is not None and array.ndim > max_dims:
+        issues.append(f"{name} has {array.ndim} dimensions, maximum allowed: {max_dims}")
+    
+    # Check exact shape if specified
+    if expected_shape is not None and array.shape != expected_shape:
+        issues.append(f"{name} shape {array.shape} does not match expected {expected_shape}")
+    
+    return {
+        'valid': len(issues) == 0,
+        'issues': issues,
+        'array_info': {
+            'shape': array.shape,
+            'dtype': str(array.dtype),
+            'size': array.size,
+            'has_nan': np.any(np.isnan(array)),
+            'has_inf': np.any(np.isinf(array)),
+            'min': float(np.min(array)) if array.size > 0 and np.all(np.isfinite(array)) else None,
+            'max': float(np.max(array)) if array.size > 0 and np.all(np.isfinite(array)) else None
+        }
+    }
+
+
+def process_time_series_data(
+    time_series: Union[pd.Series, pd.DataFrame, Dict[str, pd.Series]],
+    component_id: str
+) -> Dict[str, pd.DataFrame]:
+    """
+    Process time series data into standardized format.
+    
+    Parameters
+    ----------
+    time_series : Union[pd.Series, pd.DataFrame, Dict[str, pd.Series]]
+        Time series data in various formats
+    component_id : str
+        Component identifier for naming
+        
+    Returns
+    -------
+    Dict[str, pd.DataFrame]
+        Standardized time series data
+    """
+    result = {}
+    
+    try:
+        if isinstance(time_series, pd.Series):
+            # Single series - convert to DataFrame
+            result[f"{component_id}_returns"] = time_series.to_frame(component_id)
+        
+        elif isinstance(time_series, pd.DataFrame):
+            # DataFrame - use as-is
+            result[f"{component_id}_returns"] = time_series
+        
+        elif isinstance(time_series, dict):
+            # Dictionary of series
+            for name, series in time_series.items():
+                if isinstance(series, pd.Series):
+                    result[f"{component_id}_{name}"] = series.to_frame(f"{component_id}_{name}")
+                elif isinstance(series, pd.DataFrame):
+                    result[f"{component_id}_{name}"] = series
+                else:
+                    logger.warning(f"Unsupported time series type for {name}: {type(series)}")
+        
+        else:
+            logger.warning(f"Unsupported time series format: {type(time_series)}")
+    
+    except Exception as e:
+        logger.error(f"Error processing time series data for {component_id}: {e}")
+    
+    return result
+
+
+def calculate_risk_percentages(
+    total_risk: float,
+    factor_risk: float,
+    specific_risk: float,
+    tolerance: float = 1e-6
+) -> Dict[str, float]:
+    """
+    Calculate risk percentage breakdown with validation.
     
     Parameters
     ----------
     total_risk : float
         Total portfolio risk
-    factor_contributions : array-like
-        Factor risk contributions
-    asset_contributions : array-like
-        Asset risk contributions
-    factor_exposures : array-like, optional
-        Portfolio factor exposures
-    factor_loadings : array-like, optional
-        Asset factor loadings (N×K matrix)
-    asset_names : list of str, optional
-        Asset names/symbols
-    factor_names : list of str, optional
-        Factor names
-    analysis_type : str, default "portfolio"
-        Type of analysis
+    factor_risk : float
+        Factor risk contribution
+    specific_risk : float
+        Specific risk contribution
+    tolerance : float, default 1e-6
+        Tolerance for validation checks
         
     Returns
     -------
-    RiskResultSchema
-        Configured schema instance
+    Dict[str, float]
+        Risk percentages and validation metrics
     """
-    schema = RiskResultSchema(
-        analysis_type=analysis_type,
-        asset_names=asset_names or [],
-        factor_names=factor_names or []
-    )
+    result = {
+        'factor_risk_percentage': 0.0,
+        'specific_risk_percentage': 0.0,
+        'total_percentage': 0.0,
+        'euler_validation': True,
+        'euler_error': 0.0
+    }
     
-    # Set core metrics
-    factor_risk_total = np.sum(factor_contributions)
-    specific_risk_total = total_risk - factor_risk_total  # Approximate
-    schema.set_lens_core_metrics('portfolio', total_risk, factor_risk_total, specific_risk_total)
+    try:
+        # Calculate percentages
+        if total_risk > 0:
+            result['factor_risk_percentage'] = (factor_risk / total_risk) * 100
+            result['specific_risk_percentage'] = (specific_risk / total_risk) * 100
+            result['total_percentage'] = result['factor_risk_percentage'] + result['specific_risk_percentage']
+        
+        # Validate Euler identity
+        computed_total = factor_risk + specific_risk
+        euler_error = abs(computed_total - total_risk)
+        result['euler_error'] = euler_error
+        result['euler_validation'] = euler_error < tolerance
+        
+        if not result['euler_validation']:
+            logger.warning(f"Euler identity validation failed: error = {euler_error:.6f}")
     
-    # Set contributions
-    schema.set_lens_factor_contributions('portfolio', factor_contributions)
-    schema.set_lens_asset_contributions('portfolio', asset_contributions)
+    except Exception as e:
+        logger.error(f"Error calculating risk percentages: {e}")
     
-    # Set exposures if provided
-    if factor_exposures is not None:
-        schema.set_lens_factor_exposures('portfolio', factor_exposures)
+    return result
+
+
+def validate_weight_vector(
+    weights: np.ndarray,
+    weight_type: str = "portfolio",
+    tolerance: float = 0.01
+) -> Dict[str, Any]:
+    """
+    Validate weight vector properties.
     
-    # Set factor loadings if provided - use lens-specific method for matrices
-    if factor_loadings is not None:
-        schema.set_lens_factor_risk_contributions_matrix('portfolio', factor_loadings)
+    Parameters
+    ----------
+    weights : np.ndarray
+        Weight vector to validate
+    weight_type : str, default "portfolio"
+        Type of weights ('portfolio', 'benchmark', 'active')
+    tolerance : float, default 0.01
+        Tolerance for validation checks
+        
+    Returns
+    -------
+    Dict[str, Any]
+        Validation results
+    """
+    if weights is None:
+        return {
+            'valid': False,
+            'issues': [f"{weight_type} weights are None"],
+            'weight_sum': None
+        }
     
-    return schema
+    weights = np.asarray(weights).flatten()
+    issues = []
+    
+    # Check for finite values
+    if not np.all(np.isfinite(weights)):
+        issues.append(f"{weight_type} weights contain NaN or infinite values")
+    
+    # Check weight sum based on type
+    weight_sum = np.sum(weights)
+    if weight_type in ['portfolio', 'benchmark']:
+        if abs(weight_sum - 1.0) > tolerance:
+            issues.append(f"{weight_type} weights sum to {weight_sum:.6f}, expected H 1.0")
+    elif weight_type == 'active':
+        if abs(weight_sum) > tolerance:
+            issues.append(f"Active weights sum to {weight_sum:.6f}, expected H 0.0")
+    
+    return {
+        'valid': len(issues) == 0,
+        'issues': issues,
+        'weight_sum': float(weight_sum),
+        'weight_stats': {
+            'min': float(np.min(weights)),
+            'max': float(np.max(weights)),
+            'mean': float(np.mean(weights)),
+            'std': float(np.std(weights)),
+            'count': len(weights)
+        }
+    }
+
+
+def merge_nested_dicts(dict1: Dict[str, Any], dict2: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Recursively merge two nested dictionaries.
+    
+    Parameters
+    ----------
+    dict1 : Dict[str, Any]
+        First dictionary
+    dict2 : Dict[str, Any]
+        Second dictionary (takes precedence)
+        
+    Returns
+    -------
+    Dict[str, Any]
+        Merged dictionary
+    """
+    if dict1 is None:
+        return dict2.copy() if dict2 else {}
+    if dict2 is None:
+        return dict1.copy()
+    
+    result = dict1.copy()
+    
+    for key, value in dict2.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = merge_nested_dicts(result[key], value)
+        else:
+            result[key] = value
+    
+    return result
+
+
+def clean_nan_values(data: Dict[str, Any], replacement: Any = 0.0) -> Dict[str, Any]:
+    """
+    Clean NaN values from nested dictionary data.
+    
+    Parameters
+    ----------
+    data : Dict[str, Any]
+        Data dictionary to clean
+    replacement : Any, default 0.0
+        Value to replace NaN with
+        
+    Returns
+    -------
+    Dict[str, Any]
+        Cleaned data dictionary
+    """
+    if not isinstance(data, dict):
+        return data
+    
+    result = {}
+    
+    for key, value in data.items():
+        if isinstance(value, dict):
+            result[key] = clean_nan_values(value, replacement)
+        elif isinstance(value, (np.ndarray, list)):
+            value_array = np.asarray(value)
+            if np.any(np.isnan(value_array)):
+                value_array = np.where(np.isnan(value_array), replacement, value_array)
+                result[key] = value_array.tolist() if isinstance(value, list) else value_array
+            else:
+                result[key] = value
+        elif isinstance(value, float) and np.isnan(value):
+            result[key] = replacement
+        else:
+            result[key] = value
+    
+    return result
