@@ -298,6 +298,16 @@ class RiskSchemaFactory:
                 node_data = cls._extract_from_individual_models(
                     visitor, component_id, asset_names, factor_names
                 )
+            
+            # Extract time series data from visitor metric store for this component
+            component_time_series = cls._extract_component_time_series(visitor, component_id)
+            if component_time_series:
+                # Add time series to each lens data
+                for lens_name in ['portfolio', 'benchmark', 'active']:
+                    if lens_name in node_data:
+                        lens_time_series = component_time_series.get(lens_name, {})
+                        if lens_time_series:
+                            node_data[lens_name].update(lens_time_series)
         
         except Exception as e:
             logger.error(f"Error extracting node data for {component_id}: {e}")
@@ -334,6 +344,11 @@ class RiskSchemaFactory:
             
             # Extract comprehensive decomposer data
             lens_data = cls._extract_decomposer_data(decomposer, asset_names, factor_names)
+            
+            # Extract time series data from decomposer
+            time_series_data = cls._extract_time_series_from_decomposer(decomposer, lens_name)
+            if time_series_data:
+                lens_data.update(time_series_data)
             
             # Add lens-specific metadata
             lens_data['lens_type'] = lens_name
@@ -411,7 +426,7 @@ class RiskSchemaFactory:
             )
             data.update(risk_percentages)
             
-            # Array Properties ’ Named Dictionaries
+            # Array Properties ï¿½ Named Dictionaries
             
             # Factor contributions
             factor_contrib_array = extract_property_safely(decomposer, 'factor_contributions')
@@ -509,7 +524,7 @@ class RiskSchemaFactory:
             
             # Matrix Data
             
-            # Asset by factor contributions matrix (NxK matrix ’ nested dictionary)
+            # Asset by factor contributions matrix (NxK matrix ï¿½ nested dictionary)
             asset_factor_matrix = extract_property_safely(decomposer, 'asset_by_factor_contributions')
             if asset_factor_matrix is not None:
                 data['asset_by_factor_matrix'] = matrix_to_nested_dict(
@@ -596,6 +611,151 @@ class RiskSchemaFactory:
             logger.error(f"Error extracting time series data: {e}")
         
         return time_series
+    
+    @classmethod
+    def _extract_time_series_from_decomposer(
+        cls,
+        decomposer,
+        lens_name: str
+    ) -> Dict[str, Any]:
+        """Extract time series data from a decomposer instance."""
+        time_series_data = {}
+        
+        try:
+            # Try to extract time series data from decomposer
+            # Look for common time series properties
+            time_series_properties = [
+                'portfolio_returns',
+                'benchmark_returns', 
+                'active_returns',
+                'returns',
+                'portfolio_time_series',
+                'time_series'
+            ]
+            
+            dates = None
+            
+            for prop_name in time_series_properties:
+                prop_value = extract_property_safely(decomposer, prop_name)
+                if prop_value is not None:
+                    # Extract dates from pandas Series if available
+                    if hasattr(prop_value, 'index') and dates is None:
+                        dates = prop_value.index.tolist()
+                    
+                    # Convert values to list
+                    if hasattr(prop_value, 'tolist'):
+                        values = prop_value.tolist()
+                    elif hasattr(prop_value, 'values'):
+                        values = prop_value.values.tolist()
+                    elif isinstance(prop_value, (list, tuple)):
+                        values = list(prop_value)
+                    else:
+                        values = prop_value
+                    
+                    # Store both values and dates
+                    time_series_data[prop_name] = values
+                    if dates is not None and len(dates) == len(values):
+                        time_series_data[f'{prop_name}_dates'] = dates
+            
+            # Add generic 'returns' and 'dates' fields based on lens name
+            if lens_name == 'portfolio' and 'portfolio_returns' in time_series_data:
+                time_series_data['returns'] = time_series_data['portfolio_returns']
+                if 'portfolio_returns_dates' in time_series_data:
+                    time_series_data['dates'] = time_series_data['portfolio_returns_dates']
+            elif lens_name == 'benchmark' and 'benchmark_returns' in time_series_data:
+                time_series_data['returns'] = time_series_data['benchmark_returns']
+                if 'benchmark_returns_dates' in time_series_data:
+                    time_series_data['dates'] = time_series_data['benchmark_returns_dates']
+            elif lens_name == 'active' and 'active_returns' in time_series_data:
+                time_series_data['returns'] = time_series_data['active_returns']
+                if 'active_returns_dates' in time_series_data:
+                    time_series_data['dates'] = time_series_data['active_returns_dates']
+            
+            logger.debug(f"Extracted {len(time_series_data)} time series properties from {lens_name} decomposer")
+            
+        except Exception as e:
+            logger.debug(f"Error extracting time series from {lens_name} decomposer: {e}")
+        
+        return time_series_data
+    
+    @classmethod 
+    def _extract_component_time_series(
+        cls,
+        visitor,
+        component_id: str
+    ) -> Dict[str, Dict[str, Any]]:
+        """Extract time series data for a specific component from visitor metric store."""
+        component_time_series = {}
+        
+        try:
+            if hasattr(visitor, 'metric_store') and visitor.metric_store:
+                # Define time series metric patterns for each lens
+                time_series_patterns = {
+                    'portfolio': ['portfolio_return', 'portfolio_returns', 'return'],
+                    'benchmark': ['benchmark_return', 'benchmark_returns', 'benchmark'],
+                    'active': ['active_return', 'active_returns', 'excess_return']
+                }
+                
+                for lens_name, patterns in time_series_patterns.items():
+                    lens_time_series = {}
+                    
+                    for pattern in patterns:
+                        metric = visitor.metric_store.get_metric(component_id, pattern)
+                        if metric:
+                            try:
+                                metric_value = metric.value()
+                                
+                                # Extract dates if available
+                                dates = None
+                                if hasattr(metric_value, 'index'):
+                                    dates = metric_value.index.tolist()
+                                
+                                # Convert values to list
+                                if hasattr(metric_value, 'tolist'):
+                                    time_series_list = metric_value.tolist()
+                                elif hasattr(metric_value, 'values'):
+                                    time_series_list = metric_value.values.tolist()
+                                elif isinstance(metric_value, (list, tuple)):
+                                    time_series_list = list(metric_value)
+                                else:
+                                    continue  # Skip if we can't convert to list
+                                
+                                # Store with multiple keys for compatibility
+                                if pattern.endswith('_return') or pattern.endswith('_returns'):
+                                    lens_time_series[pattern] = time_series_list
+                                    if pattern.endswith('s'):
+                                        lens_time_series[pattern[:-1]] = time_series_list
+                                    else:
+                                        lens_time_series[pattern + 's'] = time_series_list
+                                    
+                                    # Store dates alongside values
+                                    if dates is not None and len(dates) == len(time_series_list):
+                                        lens_time_series[f'{pattern}_dates'] = dates
+                                        if pattern.endswith('s'):
+                                            lens_time_series[f'{pattern[:-1]}_dates'] = dates
+                                        else:
+                                            lens_time_series[f'{pattern}s_dates'] = dates
+                                
+                                # Add generic 'returns' and 'dates' fields for this lens
+                                if 'returns' not in lens_time_series:
+                                    lens_time_series['returns'] = time_series_list
+                                    if dates is not None and len(dates) == len(time_series_list):
+                                        lens_time_series['dates'] = dates
+                                
+                                logger.debug(f"Extracted {pattern} time series for {component_id}/{lens_name}: {len(time_series_list)} points")
+                                break  # Use first pattern that works
+                                
+                            except Exception as e:
+                                logger.debug(f"Could not extract {pattern} for {component_id}: {e}")
+                                continue
+                    
+                    if lens_time_series:
+                        component_time_series[lens_name] = lens_time_series
+                        
+        except Exception as e:
+            logger.debug(f"Error extracting component time series for {component_id}: {e}")
+        
+        return component_time_series
     
     @classmethod
     def _extract_dates_from_visitor(cls, visitor) -> Optional[pd.Index]:
