@@ -40,19 +40,11 @@ def render_kpi_cards_portfolio_active(
     data_loader,
     sidebar_state
 ) -> None:
-    """Render side-by-side KPI cards for Portfolio and Active"""
+    """SIMPLIFIED: Render KPI cards using direct schema delegation"""
     
-    # Get data for both lenses - use hierarchical data if available
-    hierarchical_components = data_loader.get_available_hierarchical_components()
-    
-    if sidebar_state.selected_node in hierarchical_components:
-        # Use hierarchical component data
-        portfolio_metrics = data_loader.get_component_risk_summary(sidebar_state.selected_node, "portfolio")
-        active_metrics = data_loader.get_component_risk_summary(sidebar_state.selected_node, "active")
-    else:
-        # Fallback to legacy data access
-        portfolio_metrics = data_loader.get_core_metrics("portfolio", sidebar_state.selected_node)
-        active_metrics = data_loader.get_core_metrics("active", sidebar_state.selected_node)
+    # Direct schema access - single source of truth  
+    portfolio_metrics = data_loader.get_core_metrics("portfolio", sidebar_state.selected_node)
+    active_metrics = data_loader.get_core_metrics("active", sidebar_state.selected_node)
     
     st.subheader("Key Performance Indicators")
     
@@ -63,37 +55,35 @@ def render_kpi_cards_portfolio_active(
         st.markdown("**Portfolio Metrics**")
         
         if portfolio_metrics:
-            # Portfolio KPIs
+            # Portfolio KPIs - display in volatility units (no basis points conversion)
             total_risk = portfolio_metrics.get('total_risk', 0)
             factor_contrib = portfolio_metrics.get('factor_risk_contribution', 0) 
             specific_contrib = portfolio_metrics.get('specific_risk_contribution', 0)
             factor_pct = portfolio_metrics.get('factor_risk_percentage', 0)
             
-            # Display metrics
-            render_kpi_card("Total Risk", total_risk, "Portfolio total risk", "basis_points")
-            render_kpi_card("Factor Risk", factor_contrib, "Factor contribution", "basis_points")
-            render_kpi_card("Specific Risk", specific_contrib, "Specific contribution", "basis_points") 
+            render_kpi_card("Total Risk", total_risk, "Portfolio total risk (volatility)", "decimal")
+            render_kpi_card("Factor Risk", factor_contrib, "Factor contribution", "decimal")
+            render_kpi_card("Specific Risk", specific_contrib, "Specific contribution", "decimal") 
             render_kpi_card("Factor %", factor_pct, "Factor risk percentage", "percentage")
         else:
-            st.info("Portfolio metrics not available for selected node")
+            st.info(f"Portfolio metrics not available: check schema.get_ui_metrics({sidebar_state.selected_node}, 'portfolio')")
     
     with col2:
         st.markdown("**Active Metrics**")
         
         if active_metrics:
-            # Active KPIs  
+            # Active KPIs - display in volatility units (no basis points conversion)
             active_risk = active_metrics.get('total_risk', 0)
             active_factor = active_metrics.get('factor_risk_contribution', 0)
             active_specific = active_metrics.get('specific_risk_contribution', 0)
             active_factor_pct = active_metrics.get('factor_risk_percentage', 0)
             
-            # Display metrics
-            render_kpi_card("Active Risk", active_risk, "Active total risk", "basis_points")
-            render_kpi_card("Active Factor", active_factor, "Active factor contribution", "basis_points")
-            render_kpi_card("Active Specific", active_specific, "Active specific contribution", "basis_points")
+            render_kpi_card("Active Risk", active_risk, "Active total risk (volatility)", "decimal")
+            render_kpi_card("Active Factor", active_factor, "Active factor contribution", "decimal")
+            render_kpi_card("Active Specific", active_specific, "Active specific contribution", "decimal")
             render_kpi_card("Active Factor %", active_factor_pct, "Active factor percentage", "percentage")
         else:
-            st.info("Active metrics not available for selected node")
+            st.info(f"Active metrics not available: check schema.get_ui_metrics({sidebar_state.selected_node}, 'active')")
 
 def render_risk_composition_chart(data_loader, sidebar_state) -> None:
     """Render stacked bar chart for Factor vs Specific risk composition"""

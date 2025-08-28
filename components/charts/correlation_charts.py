@@ -17,11 +17,11 @@ def render_scatter_plot_with_regression(
     x_series_type: str = "factor_returns",
     factor_name: str = None
 ) -> None:
-    """Render scatter plot of timeseries (y-axis) vs factor returns (x-axis) with OLS regression"""
+    """SIMPLIFIED: Render scatter plot using direct schema delegation"""
     
-    st.subheader("📈 Portfolio/Active vs Factor Returns")
+    st.subheader("Portfolio/Active vs Factor Returns")
     
-    # Get available factors
+    # Get available factors using schema delegation
     factor_names = data_loader.get_factor_names()
     
     if not factor_names:
@@ -45,31 +45,23 @@ def render_scatter_plot_with_regression(
         key="correlation_series_selector"
     )
     
-    # Get time series data
+    # Get time series data using schema delegation
     component = sidebar_state.selected_node
     y_data = data_loader.get_time_series_data(selected_series, component)
-    
-    # Get factor returns - factors are stored differently in time_series
-    time_series = data_loader.data.get('time_series', {})
-    factor_returns = time_series.get('factor_returns', {})
-    x_data = factor_returns.get(factor_name, [])
+    x_data = data_loader.get_time_series_data("factor_returns", factor_name)
     
     if not y_data or not x_data:
-        st.info(f"Insufficient data for {component} vs {factor_name}")
+        st.info(f"Insufficient time series data for {component} vs {factor_name}: check schema time series structure")
         return
     
-    # Apply date range filter
-    y_filtered = data_loader.filter_data_by_date_range(y_data, sidebar_state.date_range)
-    x_filtered = data_loader.filter_data_by_date_range(x_data, sidebar_state.date_range)
-    
     # Ensure both series have same length
-    min_length = min(len(y_filtered), len(x_filtered))
+    min_length = min(len(y_data), len(x_data))
     if min_length < 2:
         st.info("Insufficient data points for analysis")
         return
     
-    y_filtered = y_filtered[:min_length]
-    x_filtered = x_filtered[:min_length]
+    y_filtered = y_data[:min_length]
+    x_filtered = x_data[:min_length]
     
     # Calculate OLS regression
     slope, intercept, r_value, p_value, std_err = stats.linregress(x_filtered, y_filtered)
@@ -138,14 +130,15 @@ def render_scatter_plot_with_regression(
         st.metric("P-value", f"{p_value:.4f}{p_significance}", help="Statistical significance")
 
 def render_factor_correlation_heatmap(data_loader, sidebar_state) -> None:
-    """Render heatmap of factor-factor correlations"""
+    """SIMPLIFIED: Render heatmap using direct schema delegation"""
     
-    st.subheader("🔥 Factor Correlations")
+    st.subheader("Factor Correlations")
     
+    # Direct schema access - single source of truth
     factor_correlations = data_loader.get_correlations("factor_correlations")
     
     if not factor_correlations:
-        st.info("Factor correlation matrix not available - will populate when computed")
+        st.info("Factor correlation matrix not available: check schema.get_ui_matrices(TOTAL, portfolio) for correlation data")
         return
     
     # Convert to matrix format for heatmap
@@ -191,22 +184,16 @@ def render_factor_correlation_heatmap(data_loader, sidebar_state) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 def render_portfolio_factor_correlations(data_loader, sidebar_state) -> None:
-    """Render correlation between portfolio and individual factors"""
+    """SIMPLIFIED: Render correlation using direct schema delegation"""
     
-    st.subheader("📊 Portfolio vs Factor Correlations")
+    st.subheader("Portfolio vs Factor Correlations")
     
+    # Direct schema access - single source of truth  
     portfolio_vs_factors = data_loader.get_correlations("portfolio_vs_factors")
     
     if not portfolio_vs_factors:
-        st.info("Portfolio vs factor correlations not available - will populate when computed")
+        st.info("Portfolio vs factor correlations not available: check schema.get_ui_matrices(TOTAL, portfolio) for correlation data")
         return
-    
-    # Filter by selected factors if any
-    if sidebar_state.selected_factors:
-        portfolio_vs_factors = data_loader.filter_data_by_factors(
-            portfolio_vs_factors,
-            sidebar_state.selected_factors
-        )
     
     factors = list(portfolio_vs_factors.keys())
     correlations = list(portfolio_vs_factors.values())
@@ -238,16 +225,17 @@ def render_portfolio_factor_correlations(data_loader, sidebar_state) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 def render_hierarchical_correlations(data_loader, sidebar_state) -> None:
-    """Render hierarchical correlations if available"""
+    """SIMPLIFIED: Render hierarchical correlations using direct schema delegation"""
     
-    st.subheader("🌳 Hierarchical Correlations")
+    st.subheader("Hierarchical Correlations")
     
+    # Direct schema access - single source of truth
     hierarchical_corrs = data_loader.get_correlations("hierarchical_correlations")
     
     if not hierarchical_corrs:
-        st.info("Hierarchical correlations not available - will populate when computed")
+        st.info("Hierarchical correlations not available: check schema.get_ui_matrices(TOTAL, portfolio) for correlation data")
         return
     
-    # For now, display as expandable JSON until we have structured data
+    # Display as expandable JSON
     with st.expander("View Hierarchical Correlation Data"):
         st.json(hierarchical_corrs)

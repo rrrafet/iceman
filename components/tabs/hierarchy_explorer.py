@@ -110,33 +110,62 @@ def render_node_context(data_loader, sidebar_state):
     render_navigation_buttons(data_loader, current_node)
 
 def render_mini_kpi_cards(data_loader, sidebar_state, node_id, lens):
-    """Render mini KPI cards for the selected node"""
+    """Render mini KPI cards for the selected node using hierarchical data"""
     
     st.markdown("**Risk Metrics**")
     
-    # Get core metrics for this node
-    metrics = data_loader.get_core_metrics(lens, node_id)
+    # NEW: Get component decomposition data directly
+    decomposition = data_loader.get_component_decomposition(node_id, lens)
     
-    if metrics:
+    if decomposition:
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            total_risk = metrics.get('total_risk', 0)
+            total_risk = decomposition.get('total_risk', 0) * 10000  # Convert to bps
             st.metric("Total Risk", f"{total_risk:.0f} bps")
         
         with col2:
-            factor_contrib = metrics.get('factor_risk_contribution', 0)
+            factor_contrib = decomposition.get('factor_risk_contribution', 0) * 10000
             st.metric("Factor Risk", f"{factor_contrib:.0f} bps")
         
         with col3:
-            specific_contrib = metrics.get('specific_risk_contribution', 0)
+            specific_contrib = decomposition.get('specific_risk_contribution', 0) * 10000
             st.metric("Specific Risk", f"{specific_contrib:.0f} bps")
         
         with col4:
-            factor_pct = metrics.get('factor_risk_percentage', 0)
+            # Calculate factor percentage
+            total = decomposition.get('total_risk', 0)
+            factor_pct = (decomposition.get('factor_risk_contribution', 0) / total * 100) if total > 0 else 0
             st.metric("Factor %", f"{factor_pct:.1f}%")
     else:
-        st.info(f"No risk metrics available for {node_id}")
+        # Fallback to legacy metrics if decomposition not available
+        metrics = data_loader.get_core_metrics(lens, node_id)
+        if metrics:
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                total_risk = metrics.get('total_risk', 0)
+                st.metric("Total Risk", f"{total_risk:.0f} bps")
+            
+            with col2:
+                factor_contrib = metrics.get('factor_risk_contribution', 0)
+                st.metric("Factor Risk", f"{factor_contrib:.0f} bps")
+            
+            with col3:
+                specific_contrib = metrics.get('specific_risk_contribution', 0)
+                st.metric("Specific Risk", f"{specific_contrib:.0f} bps")
+            
+            with col4:
+                factor_pct = metrics.get('factor_risk_percentage', 0)
+                st.metric("Factor %", f"{factor_pct:.1f}%")
+        else:
+            st.info(f"No risk metrics available for {node_id} in {lens} lens")
+            # Show component summary info if available
+            summary = data_loader.get_component_risk_summary(node_id)
+            if summary and summary.get('exists'):
+                st.info(f"Component exists but no {lens} lens data available")
+            elif not summary.get('exists', True):
+                st.warning(f"Component {node_id} not found in hierarchical data")
 
 def render_children_table(data_loader, sidebar_state, node_id):
     """Render table of child components"""
@@ -154,23 +183,32 @@ def render_children_table(data_loader, sidebar_state, node_id):
     hierarchy_info = data_loader.get_hierarchy_info()
     component_metadata = hierarchy_info.get('component_metadata', {})
     
-    # Get weights and contributions for children
+    # Get weights and contributions for children using hierarchical data
     weights = data_loader.get_weights("portfolio_weights")
-    contributions = data_loader.get_component_asset_contributions(node_id, sidebar_state.lens)
     
-    # Build table data
+    # Build table data with enhanced hierarchical information
     table_data = []
     for child_id in children:
         metadata = component_metadata.get(child_id, {})
-        weight = weights.get(child_id, 0.0)
-        contribution = contributions.get(child_id, 0.0)
+        weight = weights.get(child_id, 0.0) * 100  # Convert to percentage
+        
+        # Get child's risk contribution using component decomposition
+        child_decomposition = data_loader.get_component_decomposition(child_id, sidebar_state.lens)
+        contribution = 0.0
+        if child_decomposition:
+            contribution = child_decomposition.get('total_risk', 0.0) * 10000  # Convert to bps
+        
+        # Get child component summary for additional info
+        child_summary = data_loader.get_component_risk_summary(child_id)
+        has_data = child_summary.get('exists', False)
         
         table_data.append({
             'Component': child_id,
             'Type': metadata.get('type', 'N/A'),
             'Level': metadata.get('level', 'N/A'),
-            'Weight (%)': f"{weight:.2f}",
-            'Risk Contrib (bps)': f"{contribution:.0f}"
+            'Weight (%)': f"{weight:.2f}" if weight > 0 else "N/A",
+            'Risk (bps)': f"{contribution:.0f}" if has_data else "N/A",
+            'Data': "✓" if has_data else "✗"
         })
     
     if table_data:
@@ -181,23 +219,28 @@ def render_children_table(data_loader, sidebar_state, node_id):
         st.info("No child component data available")
 
 def render_mini_treemap(data_loader, sidebar_state, node_id):
-    """Render mini treemap of child contributions"""
+    """Render mini treemap of child contributions using hierarchical data"""
     
     st.markdown("**Child Risk Contributions**")
     
-    # Get children and their contributions
+    # Get children using hierarchical schema methods
     children = data_loader.get_drilldown_options(node_id)
-    contributions = data_loader.get_component_asset_contributions(node_id, sidebar_state.lens)
     
-    if not children or not contributions:
-        st.info("No contribution data for visualization")
+    if not children:
+        st.info("No child components found")
         return
     
-    # Filter contributions for children only
-    child_contribs = {child: contributions.get(child, 0) for child in children if child in contributions}
+    # Get risk contributions for each child using component decomposition
+    child_contribs = {}
+    for child_id in children:
+        child_decomposition = data_loader.get_component_decomposition(child_id, sidebar_state.lens)
+        if child_decomposition:
+            # Use total risk as contribution metric
+            risk_contrib = child_decomposition.get('total_risk', 0.0) * 10000  # Convert to bps
+            child_contribs[child_id] = risk_contrib
     
     if not child_contribs:
-        st.info("No child contributions available")
+        st.info("No risk data available for child components")
         return
     
     # Create simple bar chart instead of treemap for now
@@ -225,23 +268,31 @@ def render_mini_treemap(data_loader, sidebar_state, node_id):
     st.plotly_chart(fig, use_container_width=True)
 
 def render_node_exposures(data_loader, sidebar_state, node_id, lens):
-    """Render factor exposures at this node"""
+    """Render factor exposures at this node using hierarchical data"""
     
     st.markdown("**Factor Exposures**")
     
-    # Get exposures for this node/lens
-    exposures = data_loader.get_exposures(lens)
+    # NEW: Get exposures for specific component using hierarchical data
+    exposures = data_loader.get_exposures(lens, node_id)
     
     if not exposures:
-        st.info(f"No factor exposures available for {lens} lens")
+        # Try to get exposures from component decomposition
+        decomposition = data_loader.get_component_decomposition(node_id, lens)
+        if decomposition and 'weighted_betas' in decomposition:
+            exposures = decomposition['weighted_betas']
+        elif decomposition and 'factor_exposures' in decomposition:
+            exposures = decomposition['factor_exposures']
+    
+    if not exposures:
+        st.info(f"No factor exposures available for {node_id} in {lens} lens")
         return
     
     # Filter by selected factors if any
     if sidebar_state.selected_factors:
-        exposures = data_loader.filter_data_by_factors(exposures, sidebar_state.selected_factors)
+        exposures = {f: v for f, v in exposures.items() if f in sidebar_state.selected_factors}
     
     if not exposures:
-        st.info("No exposures to display")
+        st.info("No exposures to display for selected factors")
         return
     
     # Create horizontal bar chart
@@ -275,13 +326,13 @@ def render_navigation_buttons(data_loader, node_id):
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        # Up button - navigate to parent
-        if data_loader.can_drill_up(node_id):
-            parent = data_loader.get_component_parent(node_id)
+        # Up button - navigate to parent using hierarchical schema
+        parent = data_loader.get_component_parent(node_id)
+        if parent and parent != node_id:
             if st.button(f"↑ Up to {parent}", key="nav_up"):
                 st.info(f"Navigate to parent: {parent}")
         else:
-            st.button("↑ Up (unavailable)", disabled=True, key="nav_up_disabled")
+            st.button("↑ Up (root level)", disabled=True, key="nav_up_disabled")
     
     with col2:
         # Refresh button

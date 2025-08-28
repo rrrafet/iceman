@@ -84,6 +84,7 @@ class MaverickRiskService:
                          root_component_id: str = None,
                          force_refresh: bool = False,
                          include_time_series: bool = True,
+                         populate_hierarchical: bool = False,
                          **kwargs) -> Dict[str, Any]:
         """
         Run comprehensive risk analysis using PortfolioRiskAnalyzer.
@@ -92,6 +93,7 @@ class MaverickRiskService:
             root_component_id: Root component for analysis (default: first component)
             force_refresh: Force fresh analysis ignoring cache
             include_time_series: Include comprehensive time series data
+            populate_hierarchical: Enable bulk hierarchical population of component data
             **kwargs: Additional arguments for risk analysis
             
         Returns:
@@ -104,8 +106,8 @@ class MaverickRiskService:
         if root_component_id is None:
             root_component_id = list(self.portfolio_graph.components.keys())[0]
         
-        # Check cache
-        cache_key = f"{root_component_id}_{include_time_series}_{hash(str(kwargs))}"
+        # Check cache (include hierarchical flag in cache key)
+        cache_key = f"{root_component_id}_{include_time_series}_{populate_hierarchical}_{hash(str(kwargs))}"
         if not force_refresh and cache_key in self.analysis_cache:
             logger.info(f"Returning cached analysis for {root_component_id}")
             return self.analysis_cache[cache_key]
@@ -113,13 +115,45 @@ class MaverickRiskService:
         try:
             logger.info(f"Running risk analysis for component '{root_component_id}'")
             
-            # Run the risk analysis using PortfolioRiskAnalyzer
-            risk_schema = self.risk_analyzer.get_risk_summary(
-                root_component_id=root_component_id,
-                factor_returns=self.factor_returns,
-                include_time_series=include_time_series,
-                **kwargs
-            )
+            if populate_hierarchical:
+                # NEW: Use enhanced risk analysis with hierarchical population
+                logger.info("Running analysis with hierarchical population enabled")
+                
+                # Run factor risk decomposition with visitor
+                visitor = self.risk_analyzer.decompose_factor_risk(
+                    root_component_id=root_component_id,
+                    factor_returns=self.factor_returns
+                )
+                
+                # Create schema using factory with hierarchical population
+                try:
+                    from spark.risk.schema_factory import RiskSchemaFactory
+                    risk_schema = RiskSchemaFactory.from_visitor_results(
+                        visitor=visitor,
+                        component_id=root_component_id,
+                        analysis_type='hierarchical',
+                        populate_all_components=True  # Enable bulk hierarchical storage
+                    )
+                    # Log schema creation success (visitor traversal details not directly accessible)
+                    processed_components = len(visitor._processed_components) if hasattr(visitor, '_processed_components') else 'unknown'
+                    logger.info(f"Hierarchical schema created successfully, processed {processed_components} components")
+                except ImportError as e:
+                    logger.warning(f"Could not use hierarchical schema factory: {e}")
+                    # Fallback to standard analysis
+                    risk_schema = self.risk_analyzer.get_riskresult(
+                        root_component_id=root_component_id,
+                        factor_returns=self.factor_returns,
+                        include_time_series=include_time_series,
+                        **kwargs
+                    )
+            else:
+                # Standard risk analysis using PortfolioRiskAnalyzer
+                risk_schema = self.risk_analyzer.get_riskresult(
+                    root_component_id=root_component_id,
+                    factor_returns=self.factor_returns,
+                    include_time_series=include_time_series,
+                    **kwargs
+                )
             
             # Convert schema to Maverick-friendly format
             analysis_result = self._convert_schema_to_maverick_format(
@@ -130,13 +164,15 @@ class MaverickRiskService:
             
             # Add metadata
             analysis_result['metadata'] = {
-                'analysis_type': 'hierarchical_factor_risk',
+                'analysis_type': 'hierarchical_factor_risk' if populate_hierarchical else 'standard_factor_risk',
                 'root_component': root_component_id,
                 'factor_count': self.factor_returns.shape[1],
                 'component_count': len(self.portfolio_graph.components),
                 'analysis_timestamp': datetime.now().isoformat(),
                 'include_time_series': include_time_series,
-                'schema_type': str(type(risk_schema).__name__)
+                'populate_hierarchical': populate_hierarchical,
+                'schema_type': str(type(risk_schema).__name__),
+                'hierarchical_components': len(risk_schema.get_all_component_risk_results()) if populate_hierarchical and hasattr(risk_schema, 'get_all_component_risk_results') else 0
             }
             
             # Cache the result
@@ -156,7 +192,7 @@ class MaverickRiskService:
                                           root_component_id: str,
                                           include_time_series: bool) -> Dict[str, Any]:
         """
-        Convert RiskResultSchema to Maverick UI format.
+        SIMPLIFIED: Direct schema delegation - no conversion needed.
         
         Args:
             risk_schema: RiskResultSchema from PortfolioRiskAnalyzer
@@ -164,133 +200,54 @@ class MaverickRiskService:
             include_time_series: Whether time series data was included
             
         Returns:
-            Dictionary in Maverick UI format
+            Dictionary with schema directly embedded
         """
-        try:
-            result = {
-                'success': True,
-                'root_component': root_component_id,
-                'risk_decomposition': {},
-                'hierarchy': {},
-                'validation': {},
-                'time_series': {},
-                'factor_analysis': {}
-            }
-            
-            # Extract core risk metrics
-            if hasattr(risk_schema, 'core_metrics'):
-                core_metrics = risk_schema.core_metrics
-                result['risk_decomposition'] = {
-                    'total_risk': getattr(core_metrics, 'total_risk', 0.0),
-                    'factor_risk_contribution': getattr(core_metrics, 'factor_risk_contribution', 0.0),
-                    'specific_risk_contribution': getattr(core_metrics, 'specific_risk_contribution', 0.0),
-                    'factor_risk_percentage': (
-                        getattr(core_metrics, 'factor_risk_contribution', 0.0) / 
-                        max(getattr(core_metrics, 'total_risk', 1e-10), 1e-10) * 100
-                    ),
-                    'specific_risk_percentage': (
-                        getattr(core_metrics, 'specific_risk_contribution', 0.0) / 
-                        max(getattr(core_metrics, 'total_risk', 1e-10), 1e-10) * 100
-                    )
-                }
-            
-            # Extract factor contributions
-            if hasattr(risk_schema, 'factor_contributions'):
-                result['factor_analysis']['contributions'] = dict(risk_schema.factor_contributions)
-            
-            # Extract asset contributions
-            if hasattr(risk_schema, 'asset_contributions'):
-                result['factor_analysis']['asset_contributions'] = dict(risk_schema.asset_contributions)
-            
-            # Extract hierarchy data if available
-            if hasattr(risk_schema, 'hierarchy') and risk_schema.hierarchy:
-                hierarchy_data = risk_schema.hierarchy
-                result['hierarchy'] = {
-                    'root_component': getattr(hierarchy_data, 'root_component', root_component_id),
-                    'component_metadata': getattr(hierarchy_data, 'component_metadata', {}),
-                    'adjacency_list': getattr(hierarchy_data, 'adjacency_list', {}),
-                    'component_relationships': getattr(hierarchy_data, 'component_relationships', {})
-                }
-            
-            # Extract time series data if available
-            if include_time_series and hasattr(risk_schema, 'time_series'):
-                time_series_data = risk_schema.time_series
-                
-                result['time_series'] = {
-                    'dates': getattr(time_series_data, 'dates', []),
-                    'portfolio_returns': getattr(time_series_data, 'portfolio_returns', {}),
-                    'benchmark_returns': getattr(time_series_data, 'benchmark_returns', {}),
-                    'factor_returns': getattr(time_series_data, 'factor_returns', {}),
-                    'metadata': {
-                        'start_date': getattr(time_series_data, 'dates', [None])[0] if getattr(time_series_data, 'dates', []) else None,
-                        'end_date': getattr(time_series_data, 'dates', [None, None])[-1] if getattr(time_series_data, 'dates', []) else None,
-                        'frequency': 'B',  # Business daily
-                        'currency': 'USD'
-                    }
-                }
-            
-            # Extract component-level analysis if available
-            if hasattr(risk_schema, 'data') and hasattr(risk_schema.data, 'component_risk_analysis'):
-                component_analysis = risk_schema.data.component_risk_analysis
-                
-                result['component_analysis'] = {}
-                for component_id, lenses in component_analysis.items():
-                    result['component_analysis'][component_id] = {}
-                    
-                    for lens, analysis_data in lenses.items():
-                        result['component_analysis'][component_id][lens] = {
-                            'total_risk': analysis_data.get('total_risk', 0.0),
-                            'factor_risk_contribution': analysis_data.get('factor_risk_contribution', 0.0),
-                            'specific_risk_contribution': analysis_data.get('specific_risk_contribution', 0.0),
-                            'factor_contributions': analysis_data.get('factor_contributions', {}),
-                            'asset_contributions': analysis_data.get('asset_contributions', {}),
-                            'validation': {
-                                'euler_identity_check': analysis_data.get('euler_identity_check', False),
-                                'validation_summary': analysis_data.get('validation_summary', '')
-                            }
-                        }
-            
-            # Extract validation results
-            if hasattr(risk_schema, 'validation'):
-                result['validation'] = {
-                    'passes': getattr(risk_schema.validation, 'overall_success', True),
-                    'checks': getattr(risk_schema.validation, 'validation_results', {}),
-                    'details': getattr(risk_schema.validation, 'details', {})
-                }
-            
-            return result
-            
-        except Exception as e:
-            logger.warning(f"Failed to convert schema to Maverick format: {e}")
-            return self._create_error_result(f"Schema conversion failed: {str(e)}")
+        return {
+            'success': True,
+            'root_component': root_component_id,
+            'schema': risk_schema,  # Direct schema access - single source of truth
+            'ui_data': risk_schema.to_ui_format(root_component_id) if hasattr(risk_schema, 'to_ui_format') else {}
+        }
     
     def get_component_risk_analysis(self, component_id: str, lens: str = 'portfolio') -> Dict[str, Any]:
         """
-        Get risk analysis for a specific component and lens.
+        SIMPLIFIED: Get risk analysis using schema delegation.
         
         Args:
             component_id: Component identifier
             lens: Analysis lens ('portfolio', 'benchmark', 'active')
             
         Returns:
-            Component-specific risk analysis
+            Component-specific risk analysis from schema
         """
         if not self.current_analysis_results:
             return self._create_error_result("No analysis results available")
         
+        # Get schema directly from results
+        schema = self.current_analysis_results.get('schema')
+        if not schema:
+            return self._create_error_result("No schema available")
+        
         try:
-            component_analysis = self.current_analysis_results.get('component_analysis', {})
-            
-            if component_id in component_analysis:
-                if lens in component_analysis[component_id]:
-                    return {
-                        'success': True,
-                        'component_id': component_id,
-                        'lens': lens,
-                        'analysis': component_analysis[component_id][lens]
-                    }
-            
-            return self._create_error_result(f"No {lens} analysis found for component {component_id}")
+            # Use schema methods directly - single source of truth
+            return {
+                'success': True,
+                'component_id': component_id,
+                'lens': lens,
+                'data': {
+                    'core_metrics': schema.get_ui_metrics(component_id, lens),
+                    'contributions': {
+                        'by_factor': schema.get_ui_contributions(component_id, lens, 'by_factor'),
+                        'by_asset': schema.get_ui_contributions(component_id, lens, 'by_asset'),
+                        'by_component': schema.get_ui_contributions(component_id, lens, 'by_component')
+                    },
+                    'exposures': {
+                        'factor_exposures': schema.get_ui_exposures(component_id, lens)
+                    },
+                    'weights': schema.get_ui_weights(component_id),
+                    'matrices': schema.get_ui_matrices(component_id, lens)
+                }
+            }
             
         except Exception as e:
             return self._create_error_result(f"Failed to get component analysis: {str(e)}")

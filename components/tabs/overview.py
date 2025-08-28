@@ -54,30 +54,21 @@ def render_overview_tab(data_loader, sidebar_state):
     st.divider()
     st.subheader("Summary Insights")
     
-    # Get component-specific summary metrics 
-    # Try hierarchical data first, fallback to legacy structure
-    hierarchical_components = data_loader.get_available_hierarchical_components()
-    
-    if sidebar_state.selected_node in hierarchical_components:
-        # Use new hierarchical data access
-        portfolio_metrics = data_loader.get_component_risk_summary(sidebar_state.selected_node, "portfolio")
-        active_metrics = data_loader.get_component_risk_summary(sidebar_state.selected_node, "active")
-    else:
-        # Fallback to legacy data access
-        portfolio_metrics = data_loader.get_core_metrics("portfolio", sidebar_state.selected_node)
-        active_metrics = data_loader.get_core_metrics("active", sidebar_state.selected_node)
+    # SIMPLIFIED: Direct schema access - single source of truth
+    portfolio_metrics = data_loader.get_core_metrics("portfolio", sidebar_state.selected_node)
+    active_metrics = data_loader.get_core_metrics("active", sidebar_state.selected_node)
     
     insights = []
     
     if portfolio_metrics:
         total_risk = portfolio_metrics.get('total_risk', 0)
         factor_pct = portfolio_metrics.get('factor_risk_percentage', 0)
-        insights.append(f"Portfolio total risk: **{total_risk:.0f} bps**")
+        insights.append(f"Portfolio total risk: **{total_risk:.4f}** (volatility)")
         insights.append(f"Factor risk represents **{factor_pct:.1f}%** of total risk")
     
     if active_metrics:
         active_risk = active_metrics.get('total_risk', 0)
-        insights.append(f"Active risk: **{active_risk:.0f} bps**")
+        insights.append(f"Active risk: **{active_risk:.4f}** (volatility)")
     
     # Show number of selected factors
     if sidebar_state.selected_factors:

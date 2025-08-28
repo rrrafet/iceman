@@ -10,36 +10,17 @@ from utils.colors import get_chart_color, get_factor_color, get_discrete_color_s
 def render_top_contributors_chart(
     data_loader,
     sidebar_state,
-    contrib_type: str = "by_asset",
+    contrib_type: str = "by_factor",
     title: str = "Top Contributors"
 ) -> None:
-    """Render horizontal bar chart of top risk contributors"""
+    """SIMPLIFIED: Render horizontal bar chart using direct schema delegation"""
     
-    lens = sidebar_state.lens
-    selected_node = sidebar_state.selected_node
-    
-    # Use hierarchical data if available
-    hierarchical_components = data_loader.get_available_hierarchical_components()
-    
-    if selected_node in hierarchical_components:
-        # Use hierarchical component data
-        if contrib_type == "by_asset":
-            contributions = data_loader.get_component_asset_contributions(selected_node, lens)
-        elif contrib_type == "by_factor":
-            contributions = data_loader.get_component_factor_contributions(selected_node, lens)
-        else:
-            contributions = {}
-    else:
-        # Fallback to legacy data access
-        contributions = data_loader.get_contributions(lens, contrib_type)
+    # Direct schema access - single source of truth
+    contributions = data_loader.get_contributions(sidebar_state.lens, contrib_type)
     
     if not contributions:
-        st.info(f"No {contrib_type.replace('_', ' ')} data available")
+        st.info(f"No {contrib_type.replace('_', ' ')} data available: check schema.get_ui_contributions({sidebar_state.selected_node}, '{sidebar_state.lens}', '{contrib_type}')")
         return
-    
-    # Filter by selected factors if contrib_type is by_factor
-    if contrib_type == "by_factor" and sidebar_state.selected_factors:
-        contributions = data_loader.filter_data_by_factors(contributions, sidebar_state.selected_factors)
     
     # Sort by absolute value and take top 10
     sorted_contribs = sorted(contributions.items(), key=lambda x: abs(x[1]), reverse=True)[:10]
@@ -50,19 +31,19 @@ def render_top_contributors_chart(
     
     names, values = zip(*sorted_contribs)
     
-    # Create horizontal bar chart
+    # Create horizontal bar chart - values in volatility units
     fig = go.Figure(go.Bar(
         x=list(values),
         y=list(names),
         orientation='h',
         marker_color=[get_chart_color("positive") if v >= 0 else get_chart_color("negative") for v in values],
-        text=[f"{v:.0f} bps" for v in values],
+        text=[f"{v:.4f}" for v in values],
         textposition='outside'
     ))
     
     fig.update_layout(
-        title=f"{title} - {lens.title()} Lens",
-        xaxis_title="Contribution (bps)",
+        title=f"{title} - {sidebar_state.lens.title()} Lens",
+        xaxis_title="Contribution (volatility)",
         yaxis_title="Component" if contrib_type == "by_asset" else "Factor",
         height=max(300, len(sorted_contribs) * 30 + 100),
         showlegend=False
@@ -74,77 +55,63 @@ def render_top_contributors_chart(
     st.plotly_chart(fig, use_container_width=True)
 
 def render_treemap_hierarchy(data_loader, sidebar_state) -> None:
-    """Render treemap of hierarchy footprint for current node"""
+    """SIMPLIFIED: Render treemap using direct schema delegation"""
     
     st.subheader("Hierarchy Footprint")
     
-    current_node = sidebar_state.selected_node
-    lens = sidebar_state.lens
+    # Direct schema access - single source of truth
+    contributions = data_loader.get_contributions(sidebar_state.lens, "by_component")
     
-    # Use hierarchical data navigation
-    children = data_loader.get_drilldown_options(current_node)
-    
-    if not children:
-        st.info(f"No child components found for {current_node}")
+    if not contributions:
+        st.info(f"No component contribution data available: check schema.get_ui_contributions({sidebar_state.selected_node}, '{sidebar_state.lens}', 'by_component')")
         return
-    
-    # Get contributions for children using hierarchical data
-    hierarchical_components = data_loader.get_available_hierarchical_components()
-    
-    if current_node in hierarchical_components:
-        # Use hierarchical component data
-        contributions = data_loader.get_component_asset_contributions(current_node, lens)
-    else:
-        # Fallback to legacy data access
-        contributions = data_loader.get_contributions(lens, "by_asset")
     
     # Prepare treemap data
     child_data = []
-    for child in children:
-        contribution = abs(contributions.get(child, 0))
-        if contribution > 0:  # Only show components with non-zero contribution
+    for name, contribution in contributions.items():
+        abs_contrib = abs(contribution)
+        if abs_contrib > 0:  # Only show components with non-zero contribution
             child_data.append({
-                'name': child,
-                'contribution': contribution
+                'name': name,
+                'contribution': abs_contrib
             })
     
     if not child_data:
         st.info("No child contribution data available")
         return
     
-    # Create treemap
+    # Sort by contribution size
+    child_data.sort(key=lambda x: x['contribution'], reverse=True)
+    
+    # Create treemap - values in volatility units
     fig = go.Figure(go.Treemap(
         labels=[item['name'] for item in child_data],
         values=[item['contribution'] for item in child_data],
         parents=[""] * len(child_data),  # All are root level
         textinfo="label+value",
-        texttemplate="<b>%{label}</b><br>%{value:.0f} bps",
+        texttemplate="<b>%{label}</b><br>%{value:.4f}",
         marker_colorscale=get_discrete_color_sequence(len(child_data)),
         marker_line_width=2
     ))
     
     fig.update_layout(
-        title=f"Child Components of {current_node} - {lens.title()} Lens",
+        title=f"Component Contributions - {sidebar_state.lens.title()} Lens",
         height=400
     )
     
     st.plotly_chart(fig, use_container_width=True)
 
 def render_factor_exposures_radar(data_loader, sidebar_state) -> None:
-    """Render radar chart for factor exposures"""
+    """SIMPLIFIED: Render radar chart using direct schema delegation"""
     
-    st.subheader("🎯 Factor Exposures")
+    st.subheader("Factor Exposures")
     
-    lens = sidebar_state.lens
-    exposures = data_loader.get_exposures(lens)
+    # Direct schema access - single source of truth
+    exposures = data_loader.get_exposures(sidebar_state.lens)
     
     if not exposures:
-        st.info("Factor exposure data not available")
+        st.info(f"Factor exposure data not available: check schema.get_ui_exposures({sidebar_state.selected_node}, '{sidebar_state.lens}')")
         return
-    
-    # Filter by selected factors if any
-    if sidebar_state.selected_factors:
-        exposures = data_loader.filter_data_by_factors(exposures, sidebar_state.selected_factors)
     
     factor_names = list(exposures.keys())
     exposure_values = list(exposures.values())
@@ -160,9 +127,9 @@ def render_factor_exposures_radar(data_loader, sidebar_state) -> None:
         r=exposure_values,
         theta=factor_names,
         fill='toself',
-        name=f'{lens.title()} Exposures',
-        marker_color=get_chart_color(lens),
-        line_color=get_chart_color(lens)
+        name=f'{sidebar_state.lens.title()} Exposures',
+        marker_color=get_chart_color(sidebar_state.lens),
+        line_color=get_chart_color(sidebar_state.lens)
     ))
     
     fig.update_layout(
@@ -172,7 +139,7 @@ def render_factor_exposures_radar(data_loader, sidebar_state) -> None:
                 range=[-max(abs(min(exposure_values)), abs(max(exposure_values))) * 1.1,
                        max(abs(min(exposure_values)), abs(max(exposure_values))) * 1.1]
             )),
-        title=f"Factor Exposures - {lens.title()} Lens",
+        title=f"Factor Exposures - {sidebar_state.lens.title()} Lens",
         showlegend=True,
         height=500
     )
@@ -180,18 +147,14 @@ def render_factor_exposures_radar(data_loader, sidebar_state) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 def render_factor_exposures_bar(data_loader, sidebar_state) -> None:
-    """Render bar chart for factor exposures as alternative to radar"""
+    """SIMPLIFIED: Render bar chart using direct schema delegation"""
     
-    lens = sidebar_state.lens
-    exposures = data_loader.get_exposures(lens)
+    # Direct schema access - single source of truth
+    exposures = data_loader.get_exposures(sidebar_state.lens)
     
     if not exposures:
-        st.info("Factor exposure data not available")
+        st.info(f"Factor exposure data not available: check schema.get_ui_exposures({sidebar_state.selected_node}, '{sidebar_state.lens}')")
         return
-    
-    # Filter by selected factors if any
-    if sidebar_state.selected_factors:
-        exposures = data_loader.filter_data_by_factors(exposures, sidebar_state.selected_factors)
     
     factor_names = list(exposures.keys())
     exposure_values = list(exposures.values())
@@ -210,7 +173,7 @@ def render_factor_exposures_bar(data_loader, sidebar_state) -> None:
     ))
     
     fig.update_layout(
-        title=f"Factor Exposures - {lens.title()} Lens",
+        title=f"Factor Exposures - {sidebar_state.lens.title()} Lens",
         xaxis_title="Factors",
         yaxis_title="Exposure",
         height=400,

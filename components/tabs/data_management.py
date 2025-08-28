@@ -141,7 +141,7 @@ def render_data_management_tab(data_loader, sidebar_state):
         # Your existing notebook code
         analyzer = PortfolioRiskAnalyzer(graph)
         visitor = analyzer.decompose_factor_risk("TOTAL", factor_returns=factor_returns)
-        schema = analyzer.get_comprehensive_schema("TOTAL", factor_returns=factor_returns)
+        schema = analyzer.get_riskresult("TOTAL", factor_returns=factor_returns, include_time_series=True)
         ```
         
         **Step 2: Save to Maverick Cache**

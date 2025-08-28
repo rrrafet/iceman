@@ -106,7 +106,7 @@ def render_data_refresh_controls(data_loader) -> bool:
             ```python
             from spark.portfolio.risk_analyzer import PortfolioRiskAnalyzer
             analyzer = PortfolioRiskAnalyzer(portfolio_graph)
-            schema = analyzer.get_risk_summary('TOTAL', factor_returns)
+            schema = analyzer.get_riskresult('TOTAL', factor_returns)
             ```
             """)
             
@@ -210,7 +210,7 @@ def render_quick_save_helper() -> None:
         
         ```python
         # After running your risk analysis
-        schema = analyzer.get_comprehensive_schema("TOTAL", factor_returns=factor_returns)
+        schema = analyzer.get_riskresult("TOTAL", factor_returns=factor_returns, include_time_series=True)
         
         # Save to Maverick cache
         import sys

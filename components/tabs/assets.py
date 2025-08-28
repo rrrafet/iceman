@@ -345,13 +345,16 @@ def render_component_risk_breakdown(data_loader, sidebar_state, component_id):
     
     st.markdown("**Risk Breakdown**")
     
-    # Get factor contributions for this component (would need component-specific method)
-    factor_contribs = data_loader.get_component_factor_contributions(component_id, sidebar_state.lens)
+    # NEW: Get factor contributions for this component using hierarchical schema
+    factor_contribs = data_loader.get_factor_contributions_from_schema(component_id, sidebar_state.lens)
     
     if factor_contribs:
         # Show top 5 factor contributors
+        # Convert to basis points for display
+        factor_contribs_bps = {f: v * 10000 for f, v in factor_contribs.items()}
+        
         sorted_contribs = sorted(
-            factor_contribs.items(),
+            factor_contribs_bps.items(),
             key=lambda x: abs(x[1]),
             reverse=True
         )[:5]
@@ -367,12 +370,12 @@ def render_component_risk_breakdown(data_loader, sidebar_state, component_id):
                     get_chart_color("positive") if v >= 0 else get_chart_color("negative")
                     for v in contributions
                 ],
-                text=[f"{v:.1f}" for v in contributions],
+                text=[f"{v:.1f} bps" for v in contributions],
                 textposition='outside'
             ))
             
             fig.update_layout(
-                title=f"Top Factor Contributors",
+                title=f"Top Factor Contributors - {component_id}",
                 xaxis_title="Contribution (bps)",
                 yaxis_title="Factors",
                 height=250,

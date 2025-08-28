@@ -1,6 +1,5 @@
 import streamlit as st
 import plotly.graph_objects as go
-from typing import Dict, Any
 import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
@@ -21,59 +20,87 @@ def render_decomposition_tab(data_loader, sidebar_state):
     render_decomposition_design(data_loader, sidebar_state)
 
 def render_decomposition_status(data_loader):
-    """Show status of decomposition data availability"""
+    """Show status of decomposition data availability using hierarchical schema"""
     
     st.subheader("Decomposition Status")
     
-    # Check for decomposition data in active lens
+    # NEW: Check for decomposition data using hierarchical schema methods
     try:
-        active_data = data_loader.get_component_risk_analysis("TOTAL", "active")
-        if active_data.get('success', False):
-            data_dict = active_data.get('data', {})
-            decomposition = data_dict.get('decomposition', {})
-            
-            allocation_effect = decomposition.get('allocation_effect', {})
-            selection_effect = decomposition.get('selection_effect', {})
-            interaction_effect = decomposition.get('interaction_effect', {})
+        # Get comprehensive schema data
+        schema_data = data_loader.get_comprehensive_schema_data("TOTAL")
+        
+        if schema_data:
+            # Check hierarchical validation status
+            validation = data_loader.get_hierarchical_validation()
             
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                if allocation_effect:
-                    st.success("Allocation Effect: Available")
-                    st.metric("Components", len(allocation_effect))
+                st.markdown("**Data Availability**")
+                components_with_data = validation.get('components_with_data', 0)
+                
+                if components_with_data > 0:
+                    st.success(f"Hierarchical Data: Available")
+                    st.metric("Components with Data", components_with_data)
                 else:
-                    st.info("Allocation Effect: Not Available")
+                    st.info("Hierarchical Data: Not Available")
             
             with col2:
-                if selection_effect:
-                    st.success("Selection Effect: Available") 
-                    st.metric("Components", len(selection_effect))
+                st.markdown("**Active Analysis**")
+                active_decomposition = data_loader.get_component_decomposition("TOTAL", "active")
+                
+                if active_decomposition:
+                    st.success("Active Decomposition: Available")
+                    active_factors = active_decomposition.get('factor_contributions', {})
+                    st.metric("Active Factors", len(active_factors))
                 else:
-                    st.info("Selection Effect: Not Available")
+                    st.info("Active Decomposition: Not Available")
             
             with col3:
-                if interaction_effect:
-                    st.success("Interaction Effect: Available")
-                    st.metric("Components", len(interaction_effect))
+                st.markdown("**Portfolio vs Benchmark**")
+                portfolio_decomp = data_loader.get_component_decomposition("TOTAL", "portfolio")
+                benchmark_decomp = data_loader.get_component_decomposition("TOTAL", "benchmark")
+                
+                if portfolio_decomp and benchmark_decomp:
+                    st.success("Attribution Ready: Available")
+                    st.metric("Lenses Available", "2/3")
+                elif portfolio_decomp or benchmark_decomp:
+                    st.warning("Attribution Ready: Partial")
+                    st.metric("Lenses Available", "1/3")
                 else:
-                    st.info("Interaction Effect: Not Available")
+                    st.info("Attribution Ready: Not Available")
         else:
-            st.warning("Active risk analysis not available")
-    except:
-        st.warning("Unable to check decomposition status")
+            st.warning("Schema data not available - check risk analysis")
+            
+        # Show component-level data availability
+        all_components = data_loader.get_all_component_risk_results()
+        if all_components:
+            st.markdown("**Component-Level Data:**")
+            available_components = len(all_components)
+            st.info(f"Risk data available for {available_components} components")
+            
+            # Show lens coverage
+            lens_coverage = validation.get('lens_coverage', {})
+            if lens_coverage:
+                coverage_text = ", ".join([f"{lens}: {count}" for lens, count in lens_coverage.items()])
+                st.caption(f"Lens coverage: {coverage_text}")
+                
+    except Exception as e:
+        st.error(f"Unable to check decomposition status: {str(e)}")
+        st.info("This may indicate that risk analysis has not been run yet.")
     
-    # Explanation
+    # Enhanced explanation with hierarchical context
     st.markdown("""
-    **Decomposition Analysis Explanation:**
+    **Hierarchical Decomposition Analysis:**
     
-    Performance attribution decomposes active returns into three components:
-    - **Allocation Effect**: Impact of over/underweighting sectors vs benchmark
-    - **Selection Effect**: Impact of security selection within sectors
-    - **Interaction Effect**: Combined impact of allocation and selection decisions
+    Our framework supports multi-level performance attribution:
+    - **Factor-Based Attribution**: Risk factor contributions to active returns
+    - **Component-Level Attribution**: Hierarchical breakdown across portfolio levels  
+    - **Asset-Level Attribution**: Individual security contribution analysis
+    - **Cross-Component Effects**: Interaction effects between hierarchy levels
     
-    This analysis helps identify whether excess returns come from sector allocation 
-    decisions or individual security selection skills.
+    The hierarchical schema enables attribution analysis at any portfolio component level,
+    providing insights into both factor tilts and component selection decisions.
     """)
 
 def render_decomposition_design(data_loader, sidebar_state):
@@ -130,123 +157,232 @@ def render_decomposition_summary():
         st.markdown("Combined effects will be shown here")
 
 def render_decomposition_by_factor(data_loader, sidebar_state):
-    """Render decomposition analysis by factor"""
+    """Render decomposition analysis by factor using hierarchical data"""
     
     st.markdown("**Decomposition by Factor**")
     
-    st.info("""
-    **Factor-based Decomposition Analysis:**
+    # NEW: Get factor contributions from hierarchical data
+    portfolio_factors = data_loader.get_factor_contributions_from_schema(sidebar_state.selected_node, "portfolio")
+    benchmark_factors = data_loader.get_factor_contributions_from_schema(sidebar_state.selected_node, "benchmark")
+    active_factors = data_loader.get_factor_contributions_from_schema(sidebar_state.selected_node, "active")
     
-    This view will break down allocation and selection effects by risk factors:
+    if not portfolio_factors and not benchmark_factors and not active_factors:
+        st.info("""
+        **Factor-based Decomposition Analysis:**
+        
+        Factor attribution data not available for current component.
+        
+        When available, this view shows:
+        - Factor contributions from portfolio vs benchmark exposures
+        - Active factor tilts and their risk impact
+        - Factor-specific allocation effects
+        """)
+        return
     
-    - How much of the allocation effect comes from each factor exposure
-    - Which factors contributed most to selection effects
-    - Factor-specific interaction effects
-    """)
-    
-    # Placeholder table structure
-    st.markdown("**Expected Table Structure:**")
-    
+    # Create factor decomposition table with actual data
     import pandas as pd
-    placeholder_data = pd.DataFrame({
-        'Factor': ['Market', 'SMB', 'HML', 'Quality', 'Momentum'],
-        'Allocation (bps)': ['---', '---', '---', '---', '---'],
-        'Selection (bps)': ['---', '---', '---', '---', '---'], 
-        'Interaction (bps)': ['---', '---', '---', '---', '---'],
-        'Total (bps)': ['---', '---', '---', '---', '---']
-    })
     
-    st.dataframe(placeholder_data, use_container_width=True)
+    # Get all unique factors
+    all_factors = set()
+    if portfolio_factors:
+        all_factors.update(portfolio_factors.keys())
+    if benchmark_factors:
+        all_factors.update(benchmark_factors.keys())
+    if active_factors:
+        all_factors.update(active_factors.keys())
+    
+    if all_factors:
+        st.markdown("**Factor Attribution Table:**")
+        
+        table_data = []
+        for factor in sorted(all_factors):
+            portfolio_contrib = (portfolio_factors.get(factor, 0) * 10000) if portfolio_factors else 0
+            benchmark_contrib = (benchmark_factors.get(factor, 0) * 10000) if benchmark_factors else 0
+            active_contrib = (active_factors.get(factor, 0) * 10000) if active_factors else 0
+            
+            # Calculate implied allocation effect (difference)
+            allocation_effect = portfolio_contrib - benchmark_contrib if benchmark_factors else 0
+            
+            table_data.append({
+                'Factor': factor,
+                'Portfolio (bps)': f"{portfolio_contrib:.1f}" if portfolio_factors else "N/A",
+                'Benchmark (bps)': f"{benchmark_contrib:.1f}" if benchmark_factors else "N/A",
+                'Active (bps)': f"{active_contrib:.1f}" if active_factors else "N/A",
+                'Allocation Effect (bps)': f"{allocation_effect:.1f}" if benchmark_factors else "N/A"
+            })
+        
+        factor_df = pd.DataFrame(table_data)
+        st.dataframe(factor_df, use_container_width=True)
+        
+        # Add explanation of what we're showing
+        st.info("""
+        **Table Explanation:**
+        - **Portfolio**: Factor risk contribution in the portfolio
+        - **Benchmark**: Factor risk contribution in the benchmark  
+        - **Active**: Direct active factor risk contribution
+        - **Allocation Effect**: Implied allocation effect (Portfolio - Benchmark)
+        """)
+    else:
+        st.info("No factor data available for decomposition analysis")
 
 def render_decomposition_by_component(data_loader, sidebar_state):
-    """Render decomposition analysis by component/sector"""
+    """Render decomposition analysis by component using hierarchical data"""
     
     st.markdown("**Decomposition by Component**")
     
-    st.info("""
-    **Component-based Decomposition Analysis:**
+    # NEW: Get child components and their risk data
+    children = data_loader.get_component_children_from_schema(sidebar_state.selected_node)
     
-    This view will show allocation and selection effects for each portfolio component:
-    
-    - Sector/component level allocation decisions
-    - Security selection within each sector
-    - Component-specific interaction effects
-    """)
-    
-    # Get available components for structure
-    components = data_loader.get_available_hierarchical_components()[:5]  # Top 5 for example
-    
-    if components:
-        st.markdown("**Expected Analysis Structure:**")
+    if not children:
+        st.info("""
+        **Component-based Decomposition Analysis:**
         
-        import pandas as pd
-        placeholder_data = pd.DataFrame({
-            'Component': components,
-            'Portfolio Weight (%)': ['---'] * len(components),
-            'Benchmark Weight (%)': ['---'] * len(components),
-            'Allocation (bps)': ['---'] * len(components),
-            'Selection (bps)': ['---'] * len(components),
-            'Interaction (bps)': ['---'] * len(components),
-            'Total Effect (bps)': ['---'] * len(components)
+        No child components found for current node.
+        
+        When available, this view shows:
+        - Component-level risk contributions
+        - Portfolio vs benchmark weights by component
+        - Component-specific active risk breakdown
+        """)
+        return
+    
+    st.markdown(f"**Analysis for children of {sidebar_state.selected_node}:**")
+    
+    # Get comprehensive schema data for weights
+    schema_data = data_loader.get_comprehensive_schema_data(sidebar_state.selected_node)
+    weights_section = schema_data.get('weights', {}) if schema_data else {}
+    
+    # Build component analysis table
+    import pandas as pd
+    table_data = []
+    
+    for component_id in children:
+        # Get component risk summaries
+        portfolio_decomp = data_loader.get_component_decomposition(component_id, "portfolio")
+        benchmark_decomp = data_loader.get_component_decomposition(component_id, "benchmark")
+        active_decomp = data_loader.get_component_decomposition(component_id, "active")
+        
+        # Calculate metrics
+        portfolio_risk = (portfolio_decomp.get('total_risk', 0) * 10000) if portfolio_decomp else 0
+        benchmark_risk = (benchmark_decomp.get('total_risk', 0) * 10000) if benchmark_decomp else 0
+        active_risk = (active_decomp.get('total_risk', 0) * 10000) if active_decomp else 0
+        
+        # Get weights (if available)
+        portfolio_weights = weights_section.get('portfolio_weights', {})
+        benchmark_weights = weights_section.get('benchmark_weights', {})
+        
+        portfolio_weight = portfolio_weights.get(component_id, 0) * 100  # Convert to percentage
+        benchmark_weight = benchmark_weights.get(component_id, 0) * 100
+        
+        # Calculate allocation effect (simplified)
+        allocation_effect = (portfolio_weight - benchmark_weight) if benchmark_weight > 0 else 0
+        
+        table_data.append({
+            'Component': component_id,
+            'Portfolio Weight (%)': f"{portfolio_weight:.2f}" if portfolio_weight > 0 else "N/A",
+            'Benchmark Weight (%)': f"{benchmark_weight:.2f}" if benchmark_weight > 0 else "N/A", 
+            'Portfolio Risk (bps)': f"{portfolio_risk:.0f}" if portfolio_decomp else "N/A",
+            'Benchmark Risk (bps)': f"{benchmark_risk:.0f}" if benchmark_decomp else "N/A",
+            'Active Risk (bps)': f"{active_risk:.0f}" if active_decomp else "N/A",
+            'Weight Tilt (%)': f"{allocation_effect:.2f}" if benchmark_weight > 0 else "N/A"
         })
+    
+    if table_data:
+        component_df = pd.DataFrame(table_data)
+        st.dataframe(component_df, use_container_width=True)
         
-        st.dataframe(placeholder_data, use_container_width=True)
+        st.info("""
+        **Table Explanation:**
+        - **Portfolio/Benchmark Risk**: Total risk contribution from each component
+        - **Active Risk**: Active risk contribution (portfolio vs benchmark)
+        - **Weight Tilt**: Over/under-weighting relative to benchmark
+        """)
+        
+        # Show component with highest active risk
+        if any(row['Active Risk (bps)'] != 'N/A' for row in table_data):
+            valid_active_risks = [(row['Component'], float(row['Active Risk (bps)'])) 
+                                 for row in table_data if row['Active Risk (bps)'] != 'N/A']
+            if valid_active_risks:
+                top_component = max(valid_active_risks, key=lambda x: abs(x[1]))
+                st.success(f"Highest Active Risk: {top_component[0]} ({top_component[1]:.0f} bps)")
     else:
-        st.markdown("Component structure will be shown when portfolio data is available")
+        st.info("No component data available for decomposition analysis")
 
 def render_decomposition_waterfall(data_loader, sidebar_state):
-    """Render waterfall chart for decomposition effects"""
+    """Render waterfall chart for risk decomposition effects using hierarchical data"""
     
-    st.markdown("**Decomposition Waterfall**")
+    st.markdown("**Risk Decomposition Waterfall**")
     
-    st.info("""
-    **Waterfall Chart Visualization:**
+    # NEW: Get actual decomposition data
+    portfolio_decomp = data_loader.get_component_decomposition(sidebar_state.selected_node, "portfolio")
+    benchmark_decomp = data_loader.get_component_decomposition(sidebar_state.selected_node, "benchmark")
+    active_decomp = data_loader.get_component_decomposition(sidebar_state.selected_node, "active")
     
-    The waterfall chart will show how each effect contributes to total active return:
-    
-    1. Starting point (benchmark return)
-    2. + Allocation effect
-    3. + Selection effect  
-    4. + Interaction effect
-    5. = Total portfolio return
-    """)
-    
-    # Create placeholder waterfall structure
     fig = go.Figure()
     
-    # Placeholder values
-    categories = ['Benchmark', 'Allocation', 'Selection', 'Interaction', 'Portfolio']
-    values = [0, 0, 0, 0, 0]  # Placeholder - would be actual decomposition values
-    
-    # This would be replaced with actual waterfall when data available
-    fig.add_trace(go.Bar(
-        x=categories,
-        y=[5, 2, -1, 0.5, 6.5],  # Example values
-        marker_color=['lightblue', 'green', 'red', 'orange', 'darkblue'],
-        text=['Base', '+2 bps', '-1 bps', '+0.5 bps', 'Total'],
-        textposition='outside',
-        opacity=0.3  # Low opacity to show this is placeholder
-    ))
+    if portfolio_decomp or benchmark_decomp or active_decomp:
+        # Use actual data for waterfall
+        portfolio_risk = (portfolio_decomp.get('total_risk', 0) * 10000) if portfolio_decomp else 0
+        benchmark_risk = (benchmark_decomp.get('total_risk', 0) * 10000) if benchmark_decomp else 0
+        
+        portfolio_factor = (portfolio_decomp.get('factor_risk_contribution', 0) * 10000) if portfolio_decomp else 0
+        portfolio_specific = (portfolio_decomp.get('specific_risk_contribution', 0) * 10000) if portfolio_decomp else 0
+        
+        categories = ['Benchmark Risk', 'Factor Effect', 'Specific Effect', 'Total Portfolio Risk']
+        values = [benchmark_risk, portfolio_factor - (benchmark_decomp.get('factor_risk_contribution', 0) * 10000 if benchmark_decomp else 0), 
+                 portfolio_specific, portfolio_risk]
+        colors = [get_chart_color("benchmark"), get_chart_color("positive"), get_chart_color("negative"), get_chart_color("portfolio")]
+        
+        fig.add_trace(go.Bar(
+            x=categories,
+            y=values,
+            marker_color=colors,
+            text=[f"{v:.0f} bps" for v in values],
+            textposition='outside',
+            opacity=0.8
+        ))
+        
+        title = f"Risk Decomposition: {sidebar_state.selected_node} ({sidebar_state.lens.title()} Lens)"
+        note_text = "Risk decomposition from hierarchical schema data"
+        
+    else:
+        # Fallback to placeholder
+        categories = ['Benchmark', 'Allocation', 'Selection', 'Interaction', 'Portfolio']
+        values = [5, 2, -1, 0.5, 6.5]  # Example values
+        colors = ['lightblue', 'green', 'red', 'orange', 'darkblue']
+        
+        fig.add_trace(go.Bar(
+            x=categories,
+            y=values,
+            marker_color=colors,
+            text=['Base', '+2 bps', '-1 bps', '+0.5 bps', 'Total'],
+            textposition='outside',
+            opacity=0.3  # Low opacity to show this is placeholder
+        ))
+        
+        title = "Example Decomposition Waterfall (Placeholder)"
+        note_text = "Placeholder visualization - run risk analysis to see actual data"
     
     fig.update_layout(
-        title="Example Decomposition Waterfall (Placeholder)",
-        xaxis_title="Effect Type",
-        yaxis_title="Return Contribution (bps)",
+        title=title,
+        xaxis_title="Risk Component",
+        yaxis_title="Risk Contribution (bps)",
         height=400,
         showlegend=False
     )
     
-    # Add note
-    fig.add_annotation(
-        text="Placeholder visualization - actual data coming soon",
-        xref="paper", yref="paper",
-        x=0.5, y=0.5,
-        showarrow=False,
-        font=dict(size=16, color="red"),
-        bgcolor="white",
-        bordercolor="red",
-        borderwidth=2
-    )
+    # Add informational note
+    if not (portfolio_decomp or benchmark_decomp or active_decomp):
+        fig.add_annotation(
+            text=note_text,
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=14, color="red"),
+            bgcolor="white",
+            bordercolor="red",
+            borderwidth=2
+        )
     
     st.plotly_chart(fig, use_container_width=True)
     
