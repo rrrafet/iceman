@@ -1,85 +1,105 @@
+import pandas as pd
 import streamlit as st
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
-from components.charts.kpi_cards import render_kpi_cards_portfolio_active, render_risk_composition_chart
-from components.charts.risk_charts import render_top_contributors_chart, render_treemap_hierarchy, render_factor_exposures_radar
+import plotly.express as px
 
 def render_overview_tab(data_loader, sidebar_state):
-    """Render Tab 1 - Overview (snapshot)"""
+    """Render Tab 1 - Overview (snapshot) using direct schema data access"""
     
-    st.header("Overview - Risk Snapshot")
-    st.markdown(f"**Current View:** {sidebar_state.lens.title()} | **Node:** {sidebar_state.selected_node}")
+    st.header("Overview")
+    st.markdown(f"**Node:** {sidebar_state.selected_node}")
     
-    # KPI cards - Portfolio | Active side-by-side
-    render_kpi_cards_portfolio_active(data_loader, sidebar_state)
+    # Compound returns time series chart
+    render_compound_returns_chart(data_loader, sidebar_state)
     
     st.divider()
     
     # Risk composition - stacked bars for Portfolio, Benchmark, Active
-    render_risk_composition_chart(data_loader, sidebar_state)
+    render_risk_composition(data_loader, sidebar_state)
     
-    st.divider()
     
-    # Two columns for contributors and hierarchy
-    col1, col2 = st.columns(2)
+
+def render_compound_returns_chart(data_loader, sidebar_state):
+    """Render compound returns time series chart using direct schema data."""
+    st.subheader("Compound Returns")
     
-    with col1:
-        st.subheader("Top Asset Contributors")
-        render_top_contributors_chart(
-            data_loader, 
-            sidebar_state, 
-            contrib_type="by_asset",
-            title="Top Asset Contributors"
-        )
-        
-        st.subheader("Top Factor Contributors") 
-        render_top_contributors_chart(
-            data_loader,
-            sidebar_state,
-            contrib_type="by_factor", 
-            title="Top Factor Contributors"
-        )
+    # Get schema data for current component and lens
+    portfolio_data = data_loader.get_schema_data(sidebar_state.selected_node, "portfolio")
+    benchmark_data = data_loader.get_schema_data(sidebar_state.selected_node, "benchmark")
+    active_data = data_loader.get_schema_data(sidebar_state.selected_node, "active")
     
-    with col2:
-        # Hierarchy footprint treemap
-        render_treemap_hierarchy(data_loader, sidebar_state)
-        
-        st.divider()
-        
-        # Factor posture - radar chart
-        render_factor_exposures_radar(data_loader, sidebar_state)
+    # Extract time series data and dates from schema
+    portfolio_returns = portfolio_data.get('portfolio_return', [])
+    portfolio_dates = portfolio_data.get('portfolio_return_dates', [])
     
-    # Additional insights section
-    st.divider()
-    st.subheader("Summary Insights")
-    
-    # SIMPLIFIED: Direct schema access - single source of truth
-    portfolio_metrics = data_loader.get_core_metrics("portfolio", sidebar_state.selected_node)
-    active_metrics = data_loader.get_core_metrics("active", sidebar_state.selected_node)
-    
-    insights = []
-    
-    if portfolio_metrics:
-        total_risk = portfolio_metrics.get('total_risk', 0)
-        factor_pct = portfolio_metrics.get('factor_risk_percentage', 0)
-        insights.append(f"Portfolio total risk: **{total_risk:.4f}** (volatility)")
-        insights.append(f"Factor risk represents **{factor_pct:.1f}%** of total risk")
-    
-    if active_metrics:
-        active_risk = active_metrics.get('total_risk', 0)
-        insights.append(f"Active risk: **{active_risk:.4f}** (volatility)")
-    
-    # Show number of selected factors
-    if sidebar_state.selected_factors:
-        insights.append(f"Analyzing **{len(sidebar_state.selected_factors)}** selected factors")
+    benchmark_returns = benchmark_data.get('benchmark_return', [])
+    benchmark_dates = benchmark_data.get('benchmark_return_dates', [])
+
+    if portfolio_returns and portfolio_dates and len(portfolio_returns) == len(portfolio_dates):
+        portfolio = pd.Series(index=portfolio_dates, data=portfolio_returns)
     else:
-        factor_count = len(data_loader.get_factor_names())
-        insights.append(f"All **{factor_count}** factors included in analysis")
+        portfolio = pd.Series()
     
-    # Display insights
-    if insights:
-        for insight in insights:
-            st.markdown(f"• {insight}")
+    if benchmark_returns and benchmark_dates and len(benchmark_returns) == len(benchmark_dates):
+        benchmark = pd.Series(index=benchmark_dates, data=benchmark_returns)
     else:
-        st.info("No summary insights available for current selection")
+        benchmark = pd.Series()
+
+    combined = pd.DataFrame({
+        'Portfolio': portfolio,
+        'Benchmark': benchmark,
+    }).add(1).cumprod().add(-1)
+    
+    if not combined.empty:
+        combined['Active'] = combined['Portfolio'] - combined['Benchmark']
+        fig = px.line(combined, title="", labels={'value': 'Cumulative Return', 'index': 'Date', 'variable': ''})
+        # axis format should be in percent with 1 decimal
+        fig.update_yaxes(tickformat=".1%")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No time series data available for compound returns chart")
+
+
+def render_risk_composition(data_loader, sidebar_state):
+    """Render risk composition chart using direct schema data."""
+    st.subheader("Risk Composition")
+    
+    # Get data for all lenses
+    portfolio_data = data_loader.get_schema_data(sidebar_state.selected_node, "portfolio")
+    benchmark_data = data_loader.get_schema_data(sidebar_state.selected_node, "benchmark")
+    active_data = data_loader.get_schema_data(sidebar_state.selected_node, "active")
+    
+    if portfolio_data:
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**Portfolio**")
+            total = portfolio_data.get('total_risk', 0)
+            factor = portfolio_data.get('factor_risk_contribution', 0)
+            specific = portfolio_data.get('specific_risk_contribution', 0)
+            st.metric("Total", f"{total:.1%}")
+            st.caption(f"Factor: {factor:.1%} | Specific: {specific:.1%}")
+        
+        with col2:
+            if benchmark_data:
+                st.markdown("**Benchmark**")
+                total = benchmark_data.get('total_risk', 0)
+                factor = benchmark_data.get('factor_risk_contribution', 0)
+                specific = benchmark_data.get('specific_risk_contribution', 0)
+                st.metric("Total", f"{total:.1%}")
+                st.caption(f"Factor: {factor:.1%} | Specific: {specific:.1%}")
+            else:
+                st.info("Benchmark data not available")
+        
+        with col3:
+            if active_data:
+                st.markdown("**Active**")
+                total = active_data.get('total_risk', 0)
+                factor = active_data.get('factor_risk_contribution', 0)
+                specific = active_data.get('specific_risk_contribution', 0)
+                st.metric("Total", f"{total:.1%}")
+                st.caption(f"Factor: {factor:.1%} | Specific: {specific:.1%}")
+            else:
+                st.info("Active data not available")
+
+
+
