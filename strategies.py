@@ -7,10 +7,24 @@ different decomposition approaches to be plugged into the unified decomposer.
 
 import numpy as np
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Tuple, TYPE_CHECKING
+from typing import Dict, Any, Tuple, TYPE_CHECKING, List
 from .calculator import RiskCalculator
 from .annualizer import RiskAnnualizer
 from .context import RiskContext, SingleModelContext, MultiModelContext
+
+
+def _convert_weights_to_dict(weights, asset_names: List[str]) -> Dict[str, float]:
+    """Helper function to convert weights array to dictionary with asset names."""
+    if isinstance(weights, dict):
+        return weights.copy()
+    else:
+        # Convert numpy array or other sequence to dict using asset names
+        if len(weights) == len(asset_names):
+            return dict(zip(asset_names, weights))
+        else:
+            # Fallback: create generic asset names
+            generic_names = [f'asset_{i}' for i in range(len(weights))]
+            return dict(zip(generic_names, weights))
 
 if TYPE_CHECKING:
     from .schema import RiskResultSchema
@@ -88,8 +102,8 @@ class PortfolioAnalysisStrategy(RiskAnalysisStrategy):
             annualized=annualize
         )
         
-        # Set portfolio weights
-        schema.set_portfolio_weights(weights)
+        # Set portfolio weights via schema's weights section
+        schema._data['weights']['portfolio_weights'] = _convert_weights_to_dict(weights, context.get_asset_names())
         
         # Core risk calculations (all raw, non-annualized)
         portfolio_volatility = RiskCalculator.calculate_portfolio_volatility(
@@ -162,34 +176,56 @@ class PortfolioAnalysisStrategy(RiskAnalysisStrategy):
                 'factor_risk_contribution': factor_contributions.sum(),
                 'specific_risk_contribution': specific_contributions.sum()
             }, frequency)
-            schema.set_core_metrics(
-                annualized_results['portfolio_volatility'],
-                annualized_results['factor_risk_contribution'],
-                annualized_results['specific_risk_contribution']
+            schema.set_lens_core_metrics(
+                lens='portfolio',
+                total_risk=annualized_results['portfolio_volatility'],
+                factor_risk_contribution=annualized_results['factor_risk_contribution'],
+                specific_risk_contribution=annualized_results['specific_risk_contribution']
             )
         else:
-            schema.set_core_metrics(
-                portfolio_volatility,
-                factor_contributions.sum(),
-                specific_contributions.sum()
+            schema.set_lens_core_metrics(
+                lens='portfolio',
+                total_risk=portfolio_volatility,
+                factor_risk_contribution=factor_contributions.sum(),
+                specific_risk_contribution=specific_contributions.sum()
             )
         
         # Set exposures
-        schema.set_factor_exposures(factor_exposures)
+        schema.set_lens_factor_exposures('portfolio', factor_exposures)
         
         # Set contributions (annualize if requested)
         if annualize:
             annualized_asset_contrib = RiskAnnualizer.annualize_contributions(asset_contributions, frequency)
             annualized_factor_contrib = RiskAnnualizer.annualize_contributions(factor_contributions, frequency)
-            schema.set_asset_contributions(annualized_asset_contrib)
-            schema.set_factor_contributions(annualized_factor_contrib)
+            schema.set_lens_asset_contributions('portfolio', annualized_asset_contrib)
+            schema.set_lens_factor_contributions('portfolio', annualized_factor_contrib)
         else:
-            schema.set_asset_contributions(asset_contributions)
-            schema.set_factor_contributions(factor_contributions)
+            schema.set_lens_asset_contributions('portfolio', asset_contributions)
+            schema.set_lens_factor_contributions('portfolio', factor_contributions)
         
         # Set matrix data
-        schema.set_factor_risk_contributions_matrix(asset_by_factor_contributions)
-        schema.set_weighted_betas_matrix(weighted_betas)
+        schema.set_lens_factor_risk_contributions_matrix('portfolio', asset_by_factor_contributions)
+        
+        # Store weighted betas directly in schema data structure
+        if isinstance(weighted_betas, dict):
+            schema._data['portfolio']['matrices']['weighted_betas'] = weighted_betas.copy()
+        else:
+            # Convert numpy array to dict format
+            if weighted_betas.ndim == 2:
+                n_assets, n_factors = weighted_betas.shape
+                asset_names = context.get_asset_names()
+                factor_names = context.get_factor_names()
+                if len(asset_names) != n_assets:
+                    asset_names = [f"asset_{i}" for i in range(n_assets)]
+                if len(factor_names) != n_factors:
+                    factor_names = [f"factor_{i}" for i in range(n_factors)]
+                
+                weighted_betas_dict = {}
+                for i, asset in enumerate(asset_names):
+                    weighted_betas_dict[asset] = {}
+                    for j, factor in enumerate(factor_names):
+                        weighted_betas_dict[asset][factor] = float(weighted_betas[i, j])
+                schema._data['portfolio']['matrices']['weighted_betas'] = weighted_betas_dict
         
         # Set validation results
         schema.set_validation_results(validation)
@@ -516,10 +552,11 @@ class ActiveRiskAnalysisStrategy(RiskAnalysisStrategy):
             annualized=annualize
         )
         
-        # Set weights
-        schema.set_portfolio_weights(portfolio_weights)
-        schema.set_benchmark_weights(benchmark_weights)
-        schema.set_active_weights(active_weights, auto_calculate=False)
+        # Set weights via schema's weights section
+        asset_names = context.get_asset_names()
+        schema._data['weights']['portfolio_weights'] = _convert_weights_to_dict(portfolio_weights, asset_names)
+        schema._data['weights']['benchmark_weights'] = _convert_weights_to_dict(benchmark_weights, asset_names)
+        schema._data['weights']['active_weights'] = _convert_weights_to_dict(active_weights, asset_names)
         
         # Set core metrics (apply annualization if requested)
         if annualize:
@@ -528,30 +565,32 @@ class ActiveRiskAnalysisStrategy(RiskAnalysisStrategy):
                 'factor_risk_contribution': factor_risk_contribution,
                 'specific_risk_contribution': specific_risk_contribution
             }, frequency)
-            schema.set_core_metrics(
-                annualized_results['portfolio_volatility'],
-                annualized_results['factor_risk_contribution'],
-                annualized_results['specific_risk_contribution']
+            schema.set_lens_core_metrics(
+                lens='active',
+                total_risk=annualized_results['portfolio_volatility'],
+                factor_risk_contribution=annualized_results['factor_risk_contribution'],
+                specific_risk_contribution=annualized_results['specific_risk_contribution']
             )
         else:
-            schema.set_core_metrics(
-                total_active_risk,
-                factor_risk_contribution,
-                specific_risk_contribution
+            schema.set_lens_core_metrics(
+                lens='active',
+                total_risk=total_active_risk,
+                factor_risk_contribution=factor_risk_contribution,
+                specific_risk_contribution=specific_risk_contribution
             )
         
         # Set exposures
-        schema.set_factor_exposures(active_factor_exposure)
+        schema.set_lens_factor_exposures('active', active_factor_exposure)
         
         # Set contributions (annualize if requested)
         if annualize:
             annualized_asset_contrib = RiskAnnualizer.annualize_contributions(asset_contributions['total'], frequency)
             annualized_factor_contrib = RiskAnnualizer.annualize_contributions(factor_contributions['total'], frequency)
-            schema.set_asset_contributions(annualized_asset_contrib)
-            schema.set_factor_contributions(annualized_factor_contrib)
+            schema.set_lens_asset_contributions('active', annualized_asset_contrib)
+            schema.set_lens_factor_contributions('active', annualized_factor_contrib)
         else:
-            schema.set_asset_contributions(asset_contributions['total'])
-            schema.set_factor_contributions(factor_contributions['total'])
+            schema.set_lens_asset_contributions('active', asset_contributions['total'])
+            schema.set_lens_factor_contributions('active', factor_contributions['total'])
         
         # Calculate matrix data for active risk (use portfolio model as primary)
         portfolio_volatility = RiskCalculator.calculate_portfolio_volatility(
@@ -569,8 +608,28 @@ class ActiveRiskAnalysisStrategy(RiskAnalysisStrategy):
         )
         
         # Set matrix data
-        schema.set_factor_risk_contributions_matrix(portfolio_asset_by_factor_contributions)
-        schema.set_weighted_betas_matrix(portfolio_weighted_betas)
+        schema.set_lens_factor_risk_contributions_matrix('portfolio', portfolio_asset_by_factor_contributions)
+        
+        # Store weighted betas directly in schema data structure
+        if isinstance(portfolio_weighted_betas, dict):
+            schema._data['portfolio']['matrices']['weighted_betas'] = portfolio_weighted_betas.copy()
+        else:
+            # Convert numpy array to dict format
+            if portfolio_weighted_betas.ndim == 2:
+                n_assets, n_factors = portfolio_weighted_betas.shape
+                asset_names = context.get_asset_names()
+                factor_names = context.get_factor_names()
+                if len(asset_names) != n_assets:
+                    asset_names = [f"asset_{i}" for i in range(n_assets)]
+                if len(factor_names) != n_factors:
+                    factor_names = [f"factor_{i}" for i in range(n_factors)]
+                
+                weighted_betas_dict = {}
+                for i, asset in enumerate(asset_names):
+                    weighted_betas_dict[asset] = {}
+                    for j, factor in enumerate(factor_names):
+                        weighted_betas_dict[asset][factor] = float(portfolio_weighted_betas[i, j])
+                schema._data['portfolio']['matrices']['weighted_betas'] = weighted_betas_dict
         
         # Set validation results (combine both validation types)
         combined_validation = validation.copy()
@@ -591,7 +650,12 @@ class ActiveRiskAnalysisStrategy(RiskAnalysisStrategy):
             'total_selection_risk': total_selection_risk,
             'risk_decomposition': risk_decomp
         }
-        schema.set_active_risk_metrics(active_risk_metrics)
+        # Store active risk metrics in the active lens data structure
+        schema._data['active']['core_metrics'].update({
+            'total_allocation_risk': active_risk_metrics.get('total_allocation_risk', 0.0),
+            'total_selection_risk': active_risk_metrics.get('total_selection_risk', 0.0),
+            'risk_decomposition': active_risk_metrics.get('risk_decomposition', {})
+        })
         
         # Add detailed analysis information
         schema.add_detail('portfolio_factor_exposure', portfolio_factor_exposure.tolist())

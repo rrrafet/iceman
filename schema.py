@@ -1284,6 +1284,278 @@ class RiskResultSchema:
         """Check if component has parent to drill up to."""
         return self.get_component_parent(component_id) is not None
     
+    # Bulk Hierarchical Storage Methods
+    
+    def populate_hierarchical_risk_data_from_visitor(
+        self, 
+        visitor: 'FactorRiskDecompositionVisitor',
+        component_ids: Optional[List[str]] = None,
+        lenses: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Populate hierarchical risk data from visitor results for all components.
+        
+        This method extracts risk decomposition results from a visitor that has 
+        traversed the portfolio graph and stores them in the hierarchical_risk_data
+        section for easy retrieval.
+        
+        Parameters
+        ----------
+        visitor : FactorRiskDecompositionVisitor
+            Visitor instance that has completed graph traversal
+        component_ids : list of str, optional
+            Specific components to extract (defaults to all processed components)
+        lenses : list of str, optional
+            Specific lenses to extract (defaults to ['portfolio', 'benchmark', 'active'])
+            
+        Returns
+        -------
+        dict
+            Summary of populated data with counts and any errors
+        """
+        if lenses is None:
+            lenses = ['portfolio', 'benchmark', 'active']
+        
+        summary = {
+            'components_processed': 0,
+            'lenses_populated': {},
+            'errors': [],
+            'success': True
+        }
+        
+        # Get component IDs from visitor if not specified
+        if component_ids is None:
+            component_ids = []
+            if hasattr(visitor, '_processed_components'):
+                component_ids = list(visitor._processed_components)
+            elif hasattr(visitor, 'metric_store') and visitor.metric_store:
+                # Get all components that have hierarchical model context
+                for comp_id in visitor.metric_store._metrics:
+                    if visitor.metric_store.get_metric(comp_id, 'hierarchical_model_context'):
+                        component_ids.append(comp_id)
+        
+        if not component_ids:
+            summary['success'] = False
+            summary['errors'].append("No component IDs found in visitor")
+            return summary
+        
+        # Extract risk data for each component and lens
+        for component_id in component_ids:
+            try:
+                component_data_found = False
+                
+                # Get hierarchical model context from visitor's metric store
+                if hasattr(visitor, 'metric_store') and visitor.metric_store:
+                    context_metric = visitor.metric_store.get_metric(component_id, 'hierarchical_model_context')
+                    
+                    if context_metric and hasattr(context_metric, 'value'):
+                        hierarchical_context = context_metric.value()
+                        
+                        for lens in lenses:
+                            decomposer = None
+                            
+                            # Get appropriate decomposer based on lens
+                            if lens == 'portfolio' and hasattr(hierarchical_context, 'portfolio_decomposer'):
+                                decomposer = hierarchical_context.portfolio_decomposer
+                            elif lens == 'benchmark' and hasattr(hierarchical_context, 'benchmark_decomposer'):
+                                decomposer = hierarchical_context.benchmark_decomposer
+                            elif lens == 'active' and hasattr(hierarchical_context, 'active_decomposer'):
+                                decomposer = hierarchical_context.active_decomposer
+                            
+                            if decomposer:
+                                # Extract decomposer results
+                                decomposer_result = {
+                                    'total_risk': decomposer.portfolio_volatility,
+                                    'factor_risk_contribution': decomposer.factor_risk_contribution,
+                                    'specific_risk_contribution': decomposer.specific_risk_contribution,
+                                    'factor_risk_percentage': (decomposer.factor_risk_contribution / decomposer.portfolio_volatility * 100) if decomposer.portfolio_volatility > 0 else 0.0,
+                                    'specific_risk_percentage': (decomposer.specific_risk_contribution / decomposer.portfolio_volatility * 100) if decomposer.portfolio_volatility > 0 else 0.0,
+                                    'factor_contributions': decomposer.factor_contributions if hasattr(decomposer, 'factor_contributions') else {},
+                                    'asset_contributions': decomposer.asset_total_contributions if hasattr(decomposer, 'asset_total_contributions') else {},
+                                    'weighted_betas': decomposer.weighted_betas if hasattr(decomposer, 'weighted_betas') else {},
+                                }
+                                
+                                # Store using existing method
+                                self.set_component_full_decomposition(component_id, lens, decomposer_result)
+                                component_data_found = True
+                                
+                                # Track lens population
+                                if lens not in summary['lenses_populated']:
+                                    summary['lenses_populated'][lens] = 0
+                                summary['lenses_populated'][lens] += 1
+                
+                if component_data_found:
+                    summary['components_processed'] += 1
+                else:
+                    summary['errors'].append(f"No risk data found for component '{component_id}'")
+                    
+            except Exception as e:
+                summary['errors'].append(f"Error processing component '{component_id}': {str(e)}")
+                summary['success'] = False
+        
+        return summary
+    
+    def get_all_component_risk_results(
+        self,
+        lens: Optional[str] = None,
+        include_matrices: bool = False
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Get risk results for all components in hierarchical structure.
+        
+        Parameters
+        ----------
+        lens : str, optional
+            Specific lens to retrieve ('portfolio', 'benchmark', 'active').
+            If None, returns all lenses
+        include_matrices : bool, default False
+            Whether to include matrix data in results
+            
+        Returns
+        -------
+        dict
+            Component risk results: {component_id: {lens: risk_data}}
+        """
+        hierarchical_data = self._data.get("hierarchical_risk_data", {})
+        results = {}
+        
+        for component_id, component_data in hierarchical_data.items():
+            results[component_id] = {}
+            
+            if lens is None:
+                # Return all lenses
+                for lens_type, lens_data in component_data.items():
+                    results[component_id][lens_type] = lens_data.copy()
+            else:
+                # Return specific lens
+                if lens in component_data:
+                    results[component_id][lens] = component_data[lens].copy()
+            
+            # Add matrices if requested
+            if include_matrices:
+                matrices = self.get_component_matrices(component_id, lens or 'portfolio')
+                if matrices:
+                    if lens:
+                        if lens in results[component_id]:
+                            results[component_id][lens]['matrices'] = matrices
+                    else:
+                        for lens_type in results[component_id]:
+                            matrices_data = self.get_component_matrices(component_id, lens_type)
+                            if matrices_data:
+                                results[component_id][lens_type]['matrices'] = matrices_data
+        
+        return results
+    
+    def get_component_risk_summary(self, component_id: str) -> Dict[str, Any]:
+        """
+        Get focused risk summary for a specific component.
+        
+        Parameters
+        ----------
+        component_id : str
+            Component identifier
+            
+        Returns
+        -------
+        dict
+            Focused component risk summary with all lenses and navigation info
+        """
+        summary = {
+            'component_id': component_id,
+            'exists': component_id in self._data.get("hierarchical_risk_data", {}),
+            'risk_data': {},
+            'navigation': {},
+            'metadata': {}
+        }
+        
+        if summary['exists']:
+            # Get risk data for all lenses
+            summary['risk_data'] = self.get_component_decomposition(component_id, 'portfolio') or {}
+            
+            # Get navigation info
+            summary['navigation'] = {
+                'parent': self.get_component_parent(component_id),
+                'children': self.get_component_children(component_id),
+                'descendants': self.get_component_descendants(component_id),
+                'hierarchy_path': self.get_component_hierarchy_path(component_id),
+                'can_drill_up': self.can_drill_up(component_id),
+                'can_drill_down': self.can_drill_down(component_id)
+            }
+            
+            # Get metadata
+            hierarchy = self._data.get("hierarchy", {})
+            component_metadata = hierarchy.get("component_metadata", {})
+            summary['metadata'] = component_metadata.get(component_id, {})
+        
+        return summary
+    
+    def validate_hierarchical_completeness(
+        self,
+        required_lenses: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Validate that all components have complete hierarchical risk data.
+        
+        Parameters
+        ----------
+        required_lenses : list of str, optional
+            Lenses that must be present for each component.
+            Defaults to ['portfolio', 'benchmark', 'active']
+            
+        Returns
+        -------
+        dict
+            Validation results with completeness analysis
+        """
+        if required_lenses is None:
+            required_lenses = ['portfolio', 'benchmark', 'active']
+        
+        hierarchical_data = self._data.get("hierarchical_risk_data", {})
+        hierarchy = self._data.get("hierarchy", {})
+        component_relationships = hierarchy.get("component_relationships", {})
+        
+        validation_results = {
+            'complete': True,
+            'total_components': len(component_relationships),
+            'components_with_data': len(hierarchical_data),
+            'missing_components': [],
+            'incomplete_components': {},
+            'lens_coverage': {},
+            'summary': {}
+        }
+        
+        # Check which components are missing entirely
+        for component_id in component_relationships:
+            if component_id not in hierarchical_data:
+                validation_results['missing_components'].append(component_id)
+                validation_results['complete'] = False
+        
+        # Check lens completeness for components that have data
+        for lens in required_lenses:
+            validation_results['lens_coverage'][lens] = 0
+            
+        for component_id, component_data in hierarchical_data.items():
+            missing_lenses = []
+            for lens in required_lenses:
+                if lens in component_data:
+                    validation_results['lens_coverage'][lens] += 1
+                else:
+                    missing_lenses.append(lens)
+            
+            if missing_lenses:
+                validation_results['incomplete_components'][component_id] = missing_lenses
+                validation_results['complete'] = False
+        
+        # Generate summary
+        validation_results['summary'] = {
+            'completeness_percentage': (validation_results['components_with_data'] / max(validation_results['total_components'], 1)) * 100,
+            'missing_count': len(validation_results['missing_components']),
+            'incomplete_count': len(validation_results['incomplete_components']),
+            'fully_complete_count': validation_results['components_with_data'] - len(validation_results['incomplete_components'])
+        }
+        
+        return validation_results
+    
     
     
     def set_validation_results(self, validation_results: Dict[str, Any]) -> None:
@@ -2238,130 +2510,6 @@ class RiskResultSchema:
         
         return validation_results
 
-    @classmethod
-    def from_decomposer_result(cls, decomposer_dict: Dict[str, Any]) -> 'RiskResultSchema':
-        """
-        Create schema from RiskDecomposer.to_dict() result.
-        
-        Parameters
-        ----------
-        decomposer_dict : dict
-            Result from RiskDecomposer.to_dict()
-            
-        Returns
-        -------
-        RiskResultSchema
-            Unified schema instance
-        """
-        metadata = decomposer_dict.get("metadata", {})
-        core_metrics = decomposer_dict.get("core_metrics", {})
-        
-        # Create schema instance
-        schema = cls(
-            analysis_type=metadata.get("analysis_type", "portfolio"),
-            asset_names=metadata.get("asset_names", []),
-            factor_names=metadata.get("factor_names", []),
-            annualized=metadata.get("annualized", True)
-        )
-        
-        # Set core metrics
-        if all(key in core_metrics for key in ["portfolio_volatility", "factor_risk_contribution", "specific_risk_contribution"]):
-            schema.set_core_metrics(
-                core_metrics["portfolio_volatility"],
-                core_metrics["factor_risk_contribution"],
-                core_metrics["specific_risk_contribution"]
-            )
-        
-        # Set contributions and exposures from named_contributions
-        named_contrib = decomposer_dict.get("named_contributions", {})
-        if "assets" in named_contrib:
-            asset_contrib = named_contrib["assets"].get("total_contributions", {})
-            schema.set_asset_contributions(asset_contrib)
-        
-        if "factors" in named_contrib:
-            factor_contrib = named_contrib["factors"].get("contributions", {})
-            schema.set_factor_contributions(factor_contrib)
-            
-            factor_exposures = named_contrib["factors"].get("exposures", {})
-            schema.set_factor_exposures(factor_exposures)
-        
-        if "asset_factor_loadings" in named_contrib:
-            schema.set_factor_loadings(named_contrib["asset_factor_loadings"])
-        
-        # Set validation results
-        if "validation" in decomposer_dict:
-            schema.set_validation_results(decomposer_dict["validation"])
-        
-        # Set active risk metrics
-        if "active_risk" in decomposer_dict:
-            schema.set_active_risk_metrics(decomposer_dict["active_risk"])
-        
-        # Set weights if available
-        if "weights" in decomposer_dict:
-            weights_data = decomposer_dict["weights"]
-            if "portfolio_weights" in weights_data:
-                schema.set_portfolio_weights(weights_data["portfolio_weights"])
-            if "benchmark_weights" in weights_data:
-                schema.set_benchmark_weights(weights_data["benchmark_weights"])
-            if "active_weights" in weights_data:
-                schema.set_active_weights(weights_data["active_weights"], auto_calculate=False)
-        
-        return schema
-    
-    @classmethod
-    def from_strategy_result(cls, strategy_dict: Dict[str, Any]) -> 'RiskResultSchema':
-        """
-        Create schema from Strategy.analyze() result.
-        
-        Parameters
-        ----------
-        strategy_dict : dict
-            Result from risk analysis strategy
-            
-        Returns
-        -------
-        RiskResultSchema
-            Unified schema instance
-        """
-        # Create schema instance
-        schema = cls(
-            analysis_type=strategy_dict.get("analysis_type", "portfolio"),
-            asset_names=strategy_dict.get("asset_names", []),
-            factor_names=strategy_dict.get("factor_names", []),
-            annualized=strategy_dict.get("annualized", True)
-        )
-        
-        # Set core metrics
-        schema.set_core_metrics(
-            strategy_dict["portfolio_volatility"],
-            strategy_dict["factor_risk_contribution"],
-            strategy_dict["specific_risk_contribution"]
-        )
-        
-        # Set contributions
-        if "asset_total_contributions" in strategy_dict:
-            schema.set_asset_contributions(strategy_dict["asset_total_contributions"])
-        
-        if "factor_contributions" in strategy_dict:
-            schema.set_factor_contributions(strategy_dict["factor_contributions"])
-        
-        # Set exposures
-        if "portfolio_factor_exposure" in strategy_dict:
-            schema.set_factor_exposures(strategy_dict["portfolio_factor_exposure"])
-        
-        # Set weights
-        if "portfolio_weights" in strategy_dict:
-            schema.set_portfolio_weights(strategy_dict["portfolio_weights"])
-        if "benchmark_weights" in strategy_dict:
-            schema.set_benchmark_weights(strategy_dict["benchmark_weights"])
-        if "active_weights" in strategy_dict:
-            schema.set_active_weights(strategy_dict["active_weights"], auto_calculate=False)
-        
-        # Set validation
-        if "validation" in strategy_dict:
-            schema.set_validation_results(strategy_dict["validation"])
-        
-        return schema
     
     def __repr__(self) -> str:
         """String representation of the schema."""

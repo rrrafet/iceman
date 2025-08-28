@@ -13,6 +13,18 @@ from .schema import RiskResultSchema, AnalysisType
 from .schema_utils import create_schema_from_arrays, SchemaConverter
 
 
+def _convert_weights_to_dict(weights, fallback_asset_names: List[str] = None) -> Dict[str, float]:
+    """Helper function to convert weights array to dictionary with asset names."""
+    if isinstance(weights, dict):
+        return weights.copy()
+    elif hasattr(weights, '__len__') and len(weights) > 0:
+        # Convert numpy array or other sequence to dict using generic names
+        asset_names = fallback_asset_names or [f'asset_{i}' for i in range(len(weights))]
+        return dict(zip(asset_names[:len(weights)], weights))
+    else:
+        return {}
+
+
 class RiskSchemaFactory:
     """Factory for creating unified risk result schemas."""
     
@@ -34,39 +46,6 @@ class RiskSchemaFactory:
         schema = decomposer._create_unified_schema()
         return schema
     
-    @staticmethod
-    def from_decomposer_dict(decomposer_dict: Dict[str, Any]) -> RiskResultSchema:
-        """
-        Create schema from RiskDecomposer.to_dict() result.
-        
-        Parameters
-        ----------
-        decomposer_dict : dict
-            Result from RiskDecomposer.to_dict()
-            
-        Returns
-        -------
-        RiskResultSchema
-            Unified schema
-        """
-        return SchemaConverter.decomposer_to_schema(decomposer_dict)
-    
-    @staticmethod
-    def from_strategy_result(strategy_result: Dict[str, Any]) -> RiskResultSchema:
-        """
-        Create schema from strategy analysis result.
-        
-        Parameters
-        ----------
-        strategy_result : dict
-            Result from Strategy.analyze()
-            
-        Returns
-        -------
-        RiskResultSchema
-            Unified schema
-        """
-        return SchemaConverter.strategy_to_schema(strategy_result)
     
     @staticmethod
     def from_arrays(
@@ -143,7 +122,8 @@ class RiskSchemaFactory:
     def from_visitor_results(
         visitor,
         component_id: str,
-        analysis_type: str = "hierarchical"
+        analysis_type: str = "hierarchical",
+        populate_all_components: bool = False
     ) -> RiskResultSchema:
         """
         Create schema from visitor results.
@@ -156,6 +136,8 @@ class RiskSchemaFactory:
             Component ID to extract results for
         analysis_type : str, default "hierarchical"
             Type of analysis
+        populate_all_components : bool, default False
+            If True, populate risk data for all components (not just the specified one)
             
         Returns
         -------
@@ -222,30 +204,21 @@ class RiskSchemaFactory:
                     if hasattr(hierarchical_context, 'portfolio_decomposer'):
                         portfolio_decomposer = hierarchical_context.portfolio_decomposer
                         
-                        # Portfolio lens - new structure
+                        # Portfolio lens - comprehensive data
                         schema.set_lens_core_metrics(
-                            'portfolio',
+                            lens='portfolio',
                             total_risk=portfolio_decomposer.portfolio_volatility,
                             factor_risk_contribution=portfolio_decomposer.factor_risk_contribution,
                             specific_risk_contribution=portfolio_decomposer.specific_risk_contribution
                         )
-                        schema.set_lens_factor_exposures('portfolio', portfolio_decomposer.portfolio_factor_exposure)
                         schema.set_lens_asset_contributions('portfolio', portfolio_decomposer.asset_total_contributions)
                         schema.set_lens_factor_contributions('portfolio', portfolio_decomposer.factor_contributions)
+                        schema.set_lens_factor_exposures('portfolio', portfolio_decomposer.portfolio_factor_exposure)
                         
-                        # Legacy structure (backward compatibility)
-                        schema.set_core_metrics(
-                            total_risk=portfolio_decomposer.portfolio_volatility,
-                            factor_risk_contribution=portfolio_decomposer.factor_risk_contribution,
-                            specific_risk_contribution=portfolio_decomposer.specific_risk_contribution
-                        )
-                        schema.set_asset_contributions(portfolio_decomposer.asset_total_contributions)
-                        schema.set_factor_contributions(portfolio_decomposer.factor_contributions)
-                        schema.set_factor_exposures(portfolio_decomposer.portfolio_factor_exposure)
-                        
-                        # Portfolio weights
-                        if 'portfolio_weights' in portfolio_decomposer._results:
-                            schema.set_portfolio_weights(portfolio_decomposer._results['portfolio_weights'])
+                        # Portfolio weights via schema's weights section
+                        if hasattr(portfolio_decomposer, '_results') and 'portfolio_weights' in portfolio_decomposer._results:
+                            portfolio_weights = portfolio_decomposer._results['portfolio_weights']
+                            schema._data['weights']['portfolio_weights'] = _convert_weights_to_dict(portfolio_weights)
                         
                         # Set validation results
                         validation_results = portfolio_decomposer.validate_contributions()
@@ -266,9 +239,10 @@ class RiskSchemaFactory:
                         schema.set_lens_asset_contributions('benchmark', benchmark_decomposer.asset_total_contributions)
                         schema.set_lens_factor_contributions('benchmark', benchmark_decomposer.factor_contributions)
                         
-                        # Benchmark weights (stored in portfolio_weights key)
-                        if 'portfolio_weights' in benchmark_decomposer._results:
-                            schema.set_benchmark_weights(benchmark_decomposer._results['portfolio_weights'])
+                        # Benchmark weights via schema's weights section  
+                        if hasattr(benchmark_decomposer, '_results') and 'portfolio_weights' in benchmark_decomposer._results:
+                            benchmark_weights = benchmark_decomposer._results['portfolio_weights']
+                            schema._data['weights']['benchmark_weights'] = _convert_weights_to_dict(benchmark_weights)
                     
                     # ACTIVE LENS
                     if hasattr(hierarchical_context, 'active_decomposer'):
@@ -285,24 +259,29 @@ class RiskSchemaFactory:
                         schema.set_lens_asset_contributions('active', active_decomposer.asset_total_contributions)
                         schema.set_lens_factor_contributions('active', active_decomposer.factor_contributions)
                         
-                        # Active weights calculation
-                        if ('portfolio_weights' in active_decomposer._results and 
-                            'benchmark_weights' in active_decomposer._results):
-                            active_portfolio = active_decomposer._results['portfolio_weights']
-                            active_benchmark = active_decomposer._results['benchmark_weights']
-                            active_weights = active_portfolio - active_benchmark
-                            schema.set_active_weights(active_weights, auto_calculate=False)
-                        elif 'portfolio_weights' in active_decomposer._results:
-                            # Fallback: use portfolio_weights directly if benchmark not available
-                            schema.set_active_weights(active_decomposer._results['portfolio_weights'], auto_calculate=False)
+                        # Active weights calculation via schema's weights section
+                        if hasattr(active_decomposer, '_results'):
+                            results = active_decomposer._results
+                            if 'portfolio_weights' in results and 'benchmark_weights' in results:
+                                # Calculate active weights as portfolio - benchmark
+                                active_portfolio = results['portfolio_weights']
+                                active_benchmark = results['benchmark_weights']
+                                if isinstance(active_portfolio, dict) and isinstance(active_benchmark, dict):
+                                    active_weights = {asset: active_portfolio.get(asset, 0.0) - active_benchmark.get(asset, 0.0) 
+                                                    for asset in set(active_portfolio.keys()) | set(active_benchmark.keys())}
+                                    schema._data['weights']['active_weights'] = active_weights
+                            elif 'portfolio_weights' in results:
+                                # Fallback: use portfolio_weights directly if benchmark not available
+                                active_weights = results['portfolio_weights']
+                                schema._data['weights']['active_weights'] = _convert_weights_to_dict(active_weights)
                         
-                        # Legacy active risk metrics for backward compatibility
+                        # Active risk metrics stored in context info for legacy compatibility
                         active_metrics = {
                             'total_active_risk': active_decomposer.portfolio_volatility,
                             'active_factor_risk': active_decomposer.factor_risk_contribution,
                             'active_specific_risk': active_decomposer.specific_risk_contribution
                         }
-                        schema.set_active_risk_metrics(active_metrics)
+                        schema.add_context_info('active_risk_metrics', active_metrics)
                         
                         # Add context information
                         schema.add_context_info('component_id', component_id)
@@ -329,6 +308,20 @@ class RiskSchemaFactory:
         except Exception:
             # Fallback to empty schema if extraction fails
             pass
+        
+        # **NEW: Optionally populate all hierarchical components**
+        if populate_all_components and analysis_type == "hierarchical":
+            try:
+                population_summary = schema.populate_hierarchical_risk_data_from_visitor(visitor)
+                schema.add_context_info('bulk_population_summary', population_summary)
+                
+                # Update component_ids list from populated data
+                populated_components = schema.get_available_components()
+                if populated_components:
+                    schema.component_ids = populated_components
+                    
+            except Exception as population_error:
+                schema.add_context_info('bulk_population_error', str(population_error))
         
         return schema
     
@@ -465,21 +458,17 @@ class RiskSchemaFactory:
             if isinstance(data_source, RiskDecomposer):
                 return RiskSchemaFactory.from_decomposer(data_source)
             elif isinstance(data_source, dict):
-                # Try decomposer format first, then strategy format
-                if "core_metrics" in data_source and "named_contributions" in data_source:
-                    return RiskSchemaFactory.from_decomposer_dict(data_source)
-                elif "portfolio_volatility" in data_source and "factor_contributions" in data_source:
-                    return RiskSchemaFactory.from_strategy_result(data_source)
-                else:
-                    # Generic dictionary - create empty schema and populate
-                    schema = RiskSchemaFactory.create_empty_schema()
-                    if "total_risk" in data_source:
-                        schema.set_core_metrics(
-                            data_source["total_risk"],
-                            data_source.get("factor_risk", 0.0),
-                            data_source.get("specific_risk", 0.0)
-                        )
-                    return schema
+                # Dictionary input - create empty schema with basic data
+                schema = RiskSchemaFactory.create_empty_schema()
+                if "total_risk" in data_source:
+                    # Use lens-specific method for core metrics
+                    schema.set_lens_core_metrics(
+                        lens='portfolio',  # Default to portfolio lens
+                        total_risk=data_source["total_risk"],
+                        factor_risk_contribution=data_source.get("factor_risk", 0.0),
+                        specific_risk_contribution=data_source.get("specific_risk", 0.0)
+                    )
+                return schema
             else:
                 # Unknown type - return empty schema
                 return RiskSchemaFactory.create_empty_schema()
@@ -487,7 +476,16 @@ class RiskSchemaFactory:
         elif source_type == "decomposer":
             return RiskSchemaFactory.from_decomposer(data_source)
         elif source_type == "dict":
-            return RiskSchemaFactory.from_decomposer_dict(data_source)
+            # Dictionary input - create empty schema with basic data
+            schema = RiskSchemaFactory.create_empty_schema()
+            if "total_risk" in data_source:
+                schema.set_lens_core_metrics(
+                    lens='portfolio',
+                    total_risk=data_source["total_risk"],
+                    factor_risk_contribution=data_source.get("factor_risk", 0.0),
+                    specific_risk_contribution=data_source.get("specific_risk", 0.0)
+                )
+            return schema
         else:
             return RiskSchemaFactory.create_empty_schema()
 

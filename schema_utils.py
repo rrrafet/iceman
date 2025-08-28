@@ -37,10 +37,13 @@ class SchemaValidator:
         """
         results = {}
         data = schema.data
-        core_metrics = data["core_metrics"]
+        
+        # Try to get core metrics from lens-specific structure (portfolio lens by default)
+        portfolio_lens = data.get("hierarchical_risk_data", {}).get("TOTAL", {}).get("portfolio", {})
+        core_metrics = portfolio_lens.get("decomposer_results", {})
         
         # Euler identity validation
-        if all(core_metrics[k] is not None for k in ["total_risk", "factor_risk_contribution", "specific_risk_contribution"]):
+        if all(k in core_metrics and core_metrics[k] is not None for k in ["total_risk", "factor_risk_contribution", "specific_risk_contribution"]):
             total_risk = core_metrics["total_risk"]
             factor_risk = core_metrics["factor_risk_contribution"]
             specific_risk = core_metrics["specific_risk_contribution"]
@@ -54,9 +57,9 @@ class SchemaValidator:
                 "tolerance": tolerance
             }
         
-        # Contribution sum validation
-        asset_contributions = data["contributions"]["by_asset"]
-        if asset_contributions and core_metrics["total_risk"] is not None:
+        # Contribution sum validation 
+        asset_contributions = portfolio_lens.get("asset_contributions", {})
+        if asset_contributions and core_metrics.get("total_risk") is not None:
             contrib_sum = sum(asset_contributions.values())
             total_risk = core_metrics["total_risk"]
             
@@ -69,8 +72,8 @@ class SchemaValidator:
             }
         
         # Factor contribution sum validation
-        factor_contributions = data["contributions"]["by_factor"]
-        if factor_contributions and core_metrics["factor_risk_contribution"] is not None:
+        factor_contributions = portfolio_lens.get("factor_contributions", {})
+        if factor_contributions and core_metrics.get("factor_risk_contribution") is not None:
             factor_sum = sum(factor_contributions.values())
             expected_factor_risk = core_metrics["factor_risk_contribution"]
             
@@ -83,7 +86,7 @@ class SchemaValidator:
             }
         
         # Percentage validation
-        if core_metrics["factor_risk_percentage"] is not None and core_metrics["specific_risk_percentage"] is not None:
+        if core_metrics.get("factor_risk_percentage") is not None and core_metrics.get("specific_risk_percentage") is not None:
             percentage_sum = core_metrics["factor_risk_percentage"] + core_metrics["specific_risk_percentage"]
             
             results["percentage_sum"] = {
@@ -121,13 +124,14 @@ class SchemaValidator:
         """
         results = {}
         data = schema.data
-        identifiers = data["identifiers"]
         
-        n_assets = len(identifiers["asset_names"])
-        n_factors = len(identifiers["factor_names"])
+        # Get identifiers from schema 
+        n_assets = len(schema.asset_names)
+        n_factors = len(schema.factor_names)
         
-        # Asset dimension checks
-        asset_contributions = data["contributions"]["by_asset"]
+        # Get contributions from lens-specific structure
+        portfolio_lens = data.get("hierarchical_risk_data", {}).get("TOTAL", {}).get("portfolio", {})
+        asset_contributions = portfolio_lens.get("asset_contributions", {})
         if asset_contributions:
             actual_assets = len(asset_contributions)
             results["asset_dimensions"] = {
@@ -138,7 +142,7 @@ class SchemaValidator:
             }
         
         # Factor dimension checks
-        factor_contributions = data["contributions"]["by_factor"]
+        factor_contributions = portfolio_lens.get("factor_contributions", {})
         if factor_contributions:
             actual_factors = len(factor_contributions)
             results["factor_dimensions"] = {
@@ -149,7 +153,7 @@ class SchemaValidator:
             }
         
         # Factor exposures dimensions
-        factor_exposures = data["exposures"]["factor_exposures"]
+        factor_exposures = portfolio_lens.get("factor_exposures", {})
         if factor_exposures:
             actual_exposures = len(factor_exposures)
             results["exposure_dimensions"] = {
@@ -159,8 +163,9 @@ class SchemaValidator:
                 "message": f"Factor exposures: expected {n_factors}, got {actual_exposures}"
             }
         
-        # Factor loadings dimensions
-        factor_loadings = data["exposures"]["factor_loadings"]
+        # Factor loadings dimensions - check matrices section
+        matrices = data.get("matrices", {})
+        factor_loadings = matrices.get("factor_loadings", {})
         if factor_loadings:
             actual_assets_in_loadings = len(factor_loadings)
             results["loadings_asset_dimensions"] = {
@@ -210,7 +215,57 @@ class SchemaConverter:
         RiskResultSchema
             Unified schema instance
         """
-        return RiskResultSchema.from_decomposer_result(decomposer_result)
+        # Extract metadata for schema creation
+        metadata = decomposer_result.get("metadata", {})
+        core_metrics = decomposer_result.get("core_metrics", {})
+        
+        # Create schema with extracted metadata
+        schema = RiskResultSchema(
+            analysis_type=metadata.get("analysis_type", "portfolio"),
+            asset_names=metadata.get("asset_names", []),
+            factor_names=metadata.get("factor_names", [])
+        )
+        
+        # Set core metrics using lens-specific method
+        if "portfolio_volatility" in core_metrics:
+            schema.set_lens_core_metrics(
+                lens='portfolio',
+                total_risk=core_metrics["portfolio_volatility"],
+                factor_risk_contribution=core_metrics.get("factor_risk_contribution", 0.0),
+                specific_risk_contribution=core_metrics.get("specific_risk_contribution", 0.0)
+            )
+        
+        # Set contributions from named_contributions
+        named_contrib = decomposer_result.get("named_contributions", {})
+        if "assets" in named_contrib:
+            asset_contrib = named_contrib["assets"].get("total_contributions", {})
+            if asset_contrib:
+                schema.set_lens_asset_contributions('portfolio', asset_contrib)
+        
+        if "factors" in named_contrib:
+            factor_contrib = named_contrib["factors"].get("contributions", {})
+            if factor_contrib:
+                schema.set_lens_factor_contributions('portfolio', factor_contrib)
+            
+            factor_exposures = named_contrib["factors"].get("exposures", {})
+            if factor_exposures:
+                schema.set_lens_factor_exposures('portfolio', factor_exposures)
+        
+        # Set weights if available
+        weights_data = decomposer_result.get("weights", {})
+        if weights_data:
+            if "portfolio_weights" in weights_data:
+                schema._data['weights']['portfolio_weights'] = weights_data["portfolio_weights"].copy()
+            if "benchmark_weights" in weights_data:
+                schema._data['weights']['benchmark_weights'] = weights_data["benchmark_weights"].copy()
+            if "active_weights" in weights_data:
+                schema._data['weights']['active_weights'] = weights_data["active_weights"].copy()
+        
+        # Set validation results
+        if "validation" in decomposer_result:
+            schema.set_validation_results(decomposer_result["validation"])
+        
+        return schema
     
     @staticmethod
     def strategy_to_schema(strategy_result: Dict[str, Any]) -> RiskResultSchema:
@@ -227,7 +282,46 @@ class SchemaConverter:
         RiskResultSchema
             Unified schema instance
         """
-        return RiskResultSchema.from_strategy_result(strategy_result)
+        # Create schema from strategy result
+        schema = RiskResultSchema(
+            analysis_type=strategy_result.get("analysis_type", "portfolio"),
+            asset_names=strategy_result.get("asset_names", []),
+            factor_names=strategy_result.get("factor_names", [])
+        )
+        
+        # Set core metrics using lens-specific method
+        if "portfolio_volatility" in strategy_result:
+            schema.set_lens_core_metrics(
+                lens='portfolio',
+                total_risk=strategy_result["portfolio_volatility"],
+                factor_risk_contribution=strategy_result.get("factor_risk_contribution", 0.0),
+                specific_risk_contribution=strategy_result.get("specific_risk_contribution", 0.0)
+            )
+        
+        # Set contributions using lens-specific methods
+        if "asset_total_contributions" in strategy_result:
+            schema.set_lens_asset_contributions('portfolio', strategy_result["asset_total_contributions"])
+        
+        if "factor_contributions" in strategy_result:
+            schema.set_lens_factor_contributions('portfolio', strategy_result["factor_contributions"])
+        
+        # Set exposures using lens-specific method
+        if "portfolio_factor_exposure" in strategy_result:
+            schema.set_lens_factor_exposures('portfolio', strategy_result["portfolio_factor_exposure"])
+        
+        # Set weights via schema's weights section
+        if "portfolio_weights" in strategy_result:
+            schema._data['weights']['portfolio_weights'] = strategy_result["portfolio_weights"].copy()
+        if "benchmark_weights" in strategy_result:
+            schema._data['weights']['benchmark_weights'] = strategy_result["benchmark_weights"].copy()
+        if "active_weights" in strategy_result:
+            schema._data['weights']['active_weights'] = strategy_result["active_weights"].copy()
+        
+        # Set validation results
+        if "validation" in strategy_result:
+            schema.set_validation_results(strategy_result["validation"])
+        
+        return schema
     
     @staticmethod
     def portfolio_summary_to_schema(
@@ -257,10 +351,11 @@ class SchemaConverter:
         
         # Set core metrics if available
         if "portfolio_volatility" in summary:
-            schema.set_core_metrics(
-                summary["portfolio_volatility"],
-                summary.get("factor_risk_contribution", 0.0),
-                summary.get("specific_risk_contribution", 0.0)
+            schema.set_lens_core_metrics(
+                lens='portfolio',
+                total_risk=summary["portfolio_volatility"],
+                factor_risk_contribution=summary.get("factor_risk_contribution", 0.0),
+                specific_risk_contribution=summary.get("specific_risk_contribution", 0.0)
             )
         
         return schema
@@ -307,7 +402,7 @@ class SchemaConverter:
                 total_specific_risk += core["specific_risk_contribution"]
         
         if total_risk > 0:
-            merged.set_core_metrics(total_risk, total_factor_risk, total_specific_risk)
+            merged.set_lens_core_metrics('portfolio', total_risk, total_factor_risk, total_specific_risk)
         
         # Merge contributions (simple aggregation)
         merged_asset_contrib = {}
@@ -325,9 +420,9 @@ class SchemaConverter:
                 merged_factor_contrib[factor] = merged_factor_contrib.get(factor, 0.0) + contrib
         
         if merged_asset_contrib:
-            merged.set_asset_contributions(merged_asset_contrib)
+            merged.set_lens_asset_contributions('portfolio', merged_asset_contrib)
         if merged_factor_contrib:
-            merged.set_factor_contributions(merged_factor_contrib)
+            merged.set_lens_factor_contributions('portfolio', merged_factor_contrib)
         
         # Add details about merge
         merged.add_detail("merged_from", [str(schema) for schema in schemas])
@@ -418,10 +513,11 @@ class SchemaMigrator:
                     # Generic conversion
                     schema = RiskResultSchema("portfolio")
                     if "portfolio_volatility" in result:
-                        schema.set_core_metrics(
-                            result["portfolio_volatility"],
-                            result.get("factor_risk_contribution", 0.0),
-                            result.get("specific_risk_contribution", 0.0)
+                        schema.set_lens_core_metrics(
+                            lens='portfolio',
+                            total_risk=result["portfolio_volatility"],
+                            factor_risk_contribution=result.get("factor_risk_contribution", 0.0),
+                            specific_risk_contribution=result.get("specific_risk_contribution", 0.0)
                         )
                 
                 migrated_schemas.append(schema)
@@ -453,7 +549,7 @@ def validate_unified_schema(schema: RiskResultSchema, strict: bool = False) -> T
     all_results = {}
     
     # Basic schema validation
-    basic_validation = schema.validate_schema()
+    basic_validation = schema.validate_comprehensive()
     all_results["basic"] = basic_validation
     
     # Numerical consistency validation
@@ -532,18 +628,18 @@ def create_schema_from_arrays(
     # Set core metrics
     factor_risk_total = np.sum(factor_contributions)
     specific_risk_total = total_risk - factor_risk_total  # Approximate
-    schema.set_core_metrics(total_risk, factor_risk_total, specific_risk_total)
+    schema.set_lens_core_metrics('portfolio', total_risk, factor_risk_total, specific_risk_total)
     
     # Set contributions
-    schema.set_factor_contributions(factor_contributions)
-    schema.set_asset_contributions(asset_contributions)
+    schema.set_lens_factor_contributions('portfolio', factor_contributions)
+    schema.set_lens_asset_contributions('portfolio', asset_contributions)
     
     # Set exposures if provided
     if factor_exposures is not None:
-        schema.set_factor_exposures(factor_exposures)
+        schema.set_lens_factor_exposures('portfolio', factor_exposures)
     
-    # Set factor loadings if provided
+    # Set factor loadings if provided - use lens-specific method for matrices
     if factor_loadings is not None:
-        schema.set_factor_loadings(factor_loadings)
+        schema.set_lens_factor_risk_contributions_matrix('portfolio', factor_loadings)
     
     return schema

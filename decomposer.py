@@ -76,15 +76,39 @@ class RiskDecomposer(RiskDecomposerBase):
         # Perform analysis (now returns unified schema)
         self._schema = self._strategy.analyze(context)
         
-        # Convert to legacy dict format for internal compatibility
-        self._results = self._schema.get_legacy_format("strategy")
+        # Extract data directly from schema using new methods
+        # Determine the lens based on context type
+        if hasattr(context, 'analysis_type'):
+            lens = context.analysis_type.lower() if context.analysis_type else 'portfolio'
+        else:
+            lens = 'portfolio'
         
-        # Cache commonly accessed properties
-        self._portfolio_volatility = self._results['portfolio_volatility']
-        self._factor_risk_contribution = self._results['factor_risk_contribution']
-        self._specific_risk_contribution = self._results['specific_risk_contribution']
-        self._factor_contributions = self._results['factor_contributions']
-        self._asset_total_contributions = self._results['asset_total_contributions']
+        # Cache commonly accessed properties from schema
+        core_metrics = self._schema._data.get(lens, {}).get('core_metrics', {})
+        self._portfolio_volatility = core_metrics.get('total_risk', 0.0)
+        self._factor_risk_contribution = core_metrics.get('factor_risk_contribution', 0.0)
+        self._specific_risk_contribution = core_metrics.get('specific_risk_contribution', 0.0)
+        
+        # Extract contributions
+        contributions = self._schema._data.get(lens, {}).get('contributions', {})
+        self._factor_contributions = contributions.get('by_factor', {})
+        self._asset_total_contributions = contributions.get('by_asset', {})
+        
+        # Store weights and matrices for property access
+        self._weights = self._schema._data.get('weights', {})
+        self._matrices = self._schema._data.get(lens, {}).get('matrices', {})
+        
+        # Create a results dict for backward compatibility with properties
+        self._results = {
+            'portfolio_volatility': self._portfolio_volatility,
+            'factor_risk_contribution': self._factor_risk_contribution,
+            'specific_risk_contribution': self._specific_risk_contribution,
+            'factor_contributions': self._factor_contributions,
+            'asset_total_contributions': self._asset_total_contributions,
+            'portfolio_weights': self._weights.get('portfolio_weights', {}),
+            'weighted_betas': self._matrices.get('weighted_betas', {}),
+            'asset_by_factor_contributions': self._matrices.get('factor_risk_contributions', {}),
+        }
     
     # =========================================================================
     # CORE ABSTRACT PROPERTIES (Required by base class)
