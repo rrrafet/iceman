@@ -531,6 +531,286 @@ class RiskSchemaFactory:
         return schema
 
 
+def _extract_decomposer_data(
+    decomposer,
+    asset_names: List[str], 
+    factor_names: List[str]
+) -> Dict[str, Any]:
+    """
+    Extract comprehensive data from a single risk decomposer using direct property access.
+    
+    This function extracts ALL available properties from the decomposer instance,
+    providing complete data coverage without going through summary dictionaries.
+    
+    Parameters
+    ----------
+    decomposer : RiskDecomposer
+        Risk decomposer instance
+    asset_names : list of str
+        Asset names for mapping contributions
+    factor_names : list of str
+        Factor names for mapping contributions
+        
+    Returns
+    -------
+    dict
+        Comprehensive lens data structure with all decomposer properties
+    """
+    lens_data = {}
+    
+    try:
+        # Core risk metrics - using direct property access
+
+        lens_data['total_risk'] = decomposer.portfolio_volatility
+        lens_data['factor_risk_contribution'] = decomposer.factor_risk_contribution
+        lens_data['specific_risk_contribution'] = decomposer.specific_risk_contribution
+        lens_data['factor_risk_percentage'] = (decomposer.factor_risk_contribution / decomposer.portfolio_volatility * 100) if decomposer.portfolio_volatility > 0 else 0.0
+        lens_data['specific_risk_percentage'] = (decomposer.specific_risk_contribution / decomposer.portfolio_volatility * 100) if decomposer.portfolio_volatility > 0 else 0.0
+
+        
+        # Extract core array properties and convert to named dictionaries
+        _extract_array_properties(lens_data, decomposer, asset_names, factor_names)
+        
+        # Extract optional active risk properties
+        _extract_active_risk_properties(lens_data, decomposer, asset_names, factor_names)
+        
+        # Extract matrix data and additional properties
+        _extract_matrix_properties(lens_data, decomposer, asset_names, factor_names)
+        
+        # Extract percentage properties
+        _extract_percentage_properties(lens_data, decomposer, asset_names, factor_names)
+        
+    except Exception as e:
+        # Return partial data if extraction fails
+        lens_data['extraction_error'] = str(e)
+    
+    return lens_data
+
+
+def _extract_array_properties(
+    lens_data: Dict[str, Any],
+    decomposer,
+    asset_names: List[str], 
+    factor_names: List[str]
+) -> None:
+    """Extract core array properties and convert to named dictionaries."""
+    
+    # Factor contributions
+    try:
+        factor_contributions = decomposer.factor_contributions
+        if factor_contributions is not None and len(factor_contributions) > 0:
+            if len(factor_names) == len(factor_contributions):
+                lens_data['factor_contributions'] = dict(zip(factor_names, factor_contributions))
+            else:
+                # Fallback: use indices if names don't match
+                lens_data['factor_contributions'] = {f'factor_{i}': val for i, val in enumerate(factor_contributions)}
+    except Exception:
+        pass
+    
+    # Asset total contributions
+    try:
+        asset_contributions = decomposer.asset_total_contributions
+        if asset_contributions is not None and len(asset_contributions) > 0:
+            if len(asset_names) == len(asset_contributions):
+                lens_data['asset_contributions'] = dict(zip(asset_names, asset_contributions))
+            else:
+                # Fallback: use indices if names don't match
+                lens_data['asset_contributions'] = {f'asset_{i}': val for i, val in enumerate(asset_contributions)}
+    except Exception:
+        pass
+    
+    # Portfolio factor exposures
+    try:
+        factor_exposures = decomposer.portfolio_factor_exposure
+        if factor_exposures is not None and len(factor_exposures) > 0:
+            if len(factor_names) == len(factor_exposures):
+                lens_data['factor_exposures'] = dict(zip(factor_names, factor_exposures))
+            else:
+                lens_data['factor_exposures'] = {f'factor_{i}': val for i, val in enumerate(factor_exposures)}
+    except Exception:
+        pass
+    
+    # Portfolio weights
+    try:
+        portfolio_weights = decomposer.portfolio_weights
+        if portfolio_weights is not None and len(portfolio_weights) > 0:
+            if len(asset_names) == len(portfolio_weights):
+                lens_data['portfolio_weights'] = dict(zip(asset_names, portfolio_weights))
+            else:
+                lens_data['portfolio_weights'] = {f'asset_{i}': val for i, val in enumerate(portfolio_weights)}
+    except Exception:
+        pass
+    
+    # Marginal contributions
+    try:
+        marginal_factor = decomposer.marginal_factor_contributions
+        if marginal_factor is not None and len(marginal_factor) > 0:
+            if len(factor_names) == len(marginal_factor):
+                lens_data['marginal_factor_contributions'] = dict(zip(factor_names, marginal_factor))
+    except Exception:
+        pass
+    
+    try:
+        marginal_asset = decomposer.marginal_asset_contributions  
+        if marginal_asset is not None and len(marginal_asset) > 0:
+            if len(asset_names) == len(marginal_asset):
+                lens_data['marginal_asset_contributions'] = dict(zip(asset_names, marginal_asset))
+    except Exception:
+        pass
+
+
+def _extract_active_risk_properties(
+    lens_data: Dict[str, Any],
+    decomposer,
+    asset_names: List[str], 
+    factor_names: List[str]
+) -> None:
+    """Extract optional active risk properties when available."""
+    
+    # Active risk scalar properties
+    active_scalars = [
+        'total_active_risk', 'allocation_factor_risk', 'allocation_specific_risk',
+        'selection_factor_risk', 'selection_specific_risk', 'total_allocation_risk',
+        'total_selection_risk'
+    ]
+    
+    for prop_name in active_scalars:
+        try:
+            value = getattr(decomposer, prop_name, None)
+            if value is not None:
+                lens_data[prop_name] = value
+        except Exception:
+            pass
+    
+    # Active risk array properties
+    active_arrays = [
+        ('benchmark_weights', asset_names),
+        ('active_weights', asset_names),
+        ('benchmark_factor_exposure', factor_names),
+        ('active_factor_exposure', factor_names),
+        ('asset_allocation_factor_contributions', asset_names),
+        ('asset_allocation_specific_contributions', asset_names),
+        ('asset_selection_factor_contributions', asset_names),
+        ('asset_selection_specific_contributions', asset_names),
+        ('factor_allocation_contributions', factor_names),
+        ('factor_selection_contributions', factor_names),
+        ('asset_factor_contributions', asset_names),
+        ('asset_specific_contributions', asset_names)
+    ]
+    
+    for prop_name, names in active_arrays:
+        try:
+            value = getattr(decomposer, prop_name, None)
+            if value is not None and len(value) > 0:
+                if len(names) == len(value):
+                    lens_data[prop_name] = dict(zip(names, value))
+                else:
+                    lens_data[prop_name] = {f'{prop_name}_{i}': val for i, val in enumerate(value)}
+        except Exception:
+            pass
+
+
+def _extract_matrix_properties(
+    lens_data: Dict[str, Any],
+    decomposer,
+    asset_names: List[str], 
+    factor_names: List[str]
+) -> None:
+    """Extract matrix data and special properties."""
+    
+    # Asset by factor contributions matrix
+    try:
+        matrix = decomposer.asset_by_factor_contributions
+        if matrix is not None:
+            lens_data['asset_by_factor_contributions'] = _convert_matrix_to_dict(matrix, asset_names, factor_names)
+    except Exception:
+        pass
+    
+    # Weighted betas from results dictionary
+    try:
+        if hasattr(decomposer, 'results'):
+            results = decomposer.results
+            weighted_betas = results.get('weighted_betas')
+            if weighted_betas is not None:
+                if isinstance(weighted_betas, dict):
+                    lens_data['weighted_betas'] = weighted_betas
+                else:
+                    lens_data['weighted_betas'] = _convert_matrix_to_dict(weighted_betas, asset_names, factor_names)
+    except Exception:
+        pass
+    
+    # Risk decomposition dictionary
+    try:
+        risk_decomp = decomposer.risk_decomposition
+        if risk_decomp is not None:
+            lens_data['risk_decomposition'] = risk_decomp
+    except Exception:
+        pass
+
+
+def _extract_percentage_properties(
+    lens_data: Dict[str, Any],
+    decomposer,
+    asset_names: List[str], 
+    factor_names: List[str]
+) -> None:
+    """Extract percentage-based properties."""
+    
+    try:
+        percent_total = decomposer.percent_total_contributions
+        if percent_total is not None and len(percent_total) > 0:
+            if len(asset_names) == len(percent_total):
+                lens_data['percent_total_contributions'] = dict(zip(asset_names, percent_total))
+    except Exception:
+        pass
+    
+    try:
+        percent_factor = decomposer.percent_factor_contributions
+        if percent_factor is not None and len(percent_factor) > 0:
+            if len(factor_names) == len(percent_factor):
+                lens_data['percent_factor_contributions'] = dict(zip(factor_names, percent_factor))
+    except Exception:
+        pass
+
+
+def _extract_lens_data_from_context(
+    context,
+    lens_name: str,
+    asset_names: List[str], 
+    factor_names: List[str]
+) -> Optional[Dict[str, Any]]:
+    """
+    Extract lens-specific data from hierarchical model context.
+    
+    Parameters
+    ----------
+    context : HierarchicalModelContext
+        Hierarchical model context with decomposers
+    lens_name : str
+        Name of lens ('portfolio', 'benchmark', 'active')
+    asset_names : list of str
+        Asset names for mapping contributions
+    factor_names : list of str
+        Factor names for mapping contributions
+        
+    Returns
+    -------
+    dict or None
+        Lens data structure or None if extraction fails
+    """
+    decomposer_attr = f'{lens_name}_decomposer'
+    
+    if not hasattr(context, decomposer_attr):
+        return None
+        
+    try:
+        decomposer = getattr(context, decomposer_attr)
+        return _extract_decomposer_data(decomposer, asset_names, factor_names)
+    except Exception as e:
+        # Return None if lens extraction fails - skip this lens
+        return None
+
+
 def _extract_node_risk_data(
     visitor, 
     component_id: str, 
@@ -579,125 +859,11 @@ def _extract_node_risk_data(
             
         context = context_metric.value()
         
-        # Extract portfolio lens data
-        if hasattr(context, 'portfolio_decomposer'):
-            try:
-                portfolio_decomposer = context.portfolio_decomposer
-                portfolio_summary = portfolio_decomposer.risk_decomposition_summary()
-                
-                node_data['portfolio'] = {
-                    'decomposer_results': {
-                        'total_risk': portfolio_summary.get('portfolio_volatility', 0.0),
-                        'factor_risk_contribution': portfolio_summary.get('factor_risk_contribution', 0.0),
-                        'specific_risk_contribution': portfolio_summary.get('specific_risk_contribution', 0.0),
-                        'factor_risk_percentage': portfolio_summary.get('factor_risk_percentage', 0.0),
-                        'specific_risk_percentage': portfolio_summary.get('specific_risk_percentage', 0.0)
-                    }
-                }
-                
-                # Factor contributions
-                if hasattr(portfolio_decomposer, 'factor_contributions') and portfolio_decomposer.factor_contributions is not None:
-                    if len(factor_names) == len(portfolio_decomposer.factor_contributions):
-                        node_data['portfolio']['factor_contributions'] = dict(zip(
-                            factor_names, 
-                            portfolio_decomposer.factor_contributions
-                        ))
-                
-                # Asset contributions  
-                if hasattr(portfolio_decomposer, 'asset_contributions') and portfolio_decomposer.asset_contributions is not None:
-                    if len(asset_names) == len(portfolio_decomposer.asset_contributions):
-                        node_data['portfolio']['asset_contributions'] = dict(zip(
-                            asset_names,
-                            portfolio_decomposer.asset_contributions
-                        ))
-                
-                # Factor exposures
-                if hasattr(portfolio_decomposer, 'portfolio_factor_exposure') and portfolio_decomposer.portfolio_factor_exposure is not None:
-                    if len(factor_names) == len(portfolio_decomposer.portfolio_factor_exposure):
-                        node_data['portfolio']['factor_exposures'] = dict(zip(
-                            factor_names,
-                            portfolio_decomposer.portfolio_factor_exposure
-                        ))
-                
-                # Weighted betas matrix
-                if hasattr(portfolio_decomposer, 'weighted_betas') and portfolio_decomposer.weighted_betas is not None:
-                    node_data['portfolio']['weighted_betas'] = _convert_matrix_to_dict(
-                        portfolio_decomposer.weighted_betas, asset_names, factor_names
-                    )
-                
-            except Exception as e:
-                # Portfolio decomposer failed - skip this lens
-                pass
-        
-        # Extract benchmark lens data
-        if hasattr(context, 'benchmark_decomposer'):
-            try:
-                benchmark_decomposer = context.benchmark_decomposer
-                benchmark_summary = benchmark_decomposer.risk_decomposition_summary()
-                
-                node_data['benchmark'] = {
-                    'decomposer_results': {
-                        'total_risk': benchmark_summary.get('portfolio_volatility', 0.0),
-                        'factor_risk_contribution': benchmark_summary.get('factor_risk_contribution', 0.0),
-                        'specific_risk_contribution': benchmark_summary.get('specific_risk_contribution', 0.0),
-                        'factor_risk_percentage': benchmark_summary.get('factor_risk_percentage', 0.0),
-                        'specific_risk_percentage': benchmark_summary.get('specific_risk_percentage', 0.0)
-                    }
-                }
-                
-                # Similar extraction for benchmark decomposer
-                if hasattr(benchmark_decomposer, 'factor_contributions') and benchmark_decomposer.factor_contributions is not None:
-                    if len(factor_names) == len(benchmark_decomposer.factor_contributions):
-                        node_data['benchmark']['factor_contributions'] = dict(zip(
-                            factor_names,
-                            benchmark_decomposer.factor_contributions
-                        ))
-                
-                if hasattr(benchmark_decomposer, 'portfolio_factor_exposure') and benchmark_decomposer.portfolio_factor_exposure is not None:
-                    if len(factor_names) == len(benchmark_decomposer.portfolio_factor_exposure):
-                        node_data['benchmark']['factor_exposures'] = dict(zip(
-                            factor_names,
-                            benchmark_decomposer.portfolio_factor_exposure
-                        ))
-                        
-            except Exception as e:
-                # Benchmark decomposer failed - skip this lens
-                pass
-        
-        # Extract active lens data  
-        if hasattr(context, 'active_decomposer'):
-            try:
-                active_decomposer = context.active_decomposer
-                active_summary = active_decomposer.risk_decomposition_summary()
-                
-                node_data['active'] = {
-                    'decomposer_results': {
-                        'total_risk': active_summary.get('portfolio_volatility', 0.0),
-                        'factor_risk_contribution': active_summary.get('factor_risk_contribution', 0.0),
-                        'specific_risk_contribution': active_summary.get('specific_risk_contribution', 0.0),
-                        'factor_risk_percentage': active_summary.get('factor_risk_percentage', 0.0),
-                        'specific_risk_percentage': active_summary.get('specific_risk_percentage', 0.0)
-                    }
-                }
-                
-                # Similar extraction for active decomposer
-                if hasattr(active_decomposer, 'factor_contributions') and active_decomposer.factor_contributions is not None:
-                    if len(factor_names) == len(active_decomposer.factor_contributions):
-                        node_data['active']['factor_contributions'] = dict(zip(
-                            factor_names,
-                            active_decomposer.factor_contributions
-                        ))
-                
-                if hasattr(active_decomposer, 'portfolio_factor_exposure') and active_decomposer.portfolio_factor_exposure is not None:
-                    if len(factor_names) == len(active_decomposer.portfolio_factor_exposure):
-                        node_data['active']['factor_exposures'] = dict(zip(
-                            factor_names,
-                            active_decomposer.portfolio_factor_exposure
-                        ))
-                        
-            except Exception as e:
-                # Active decomposer failed - skip this lens
-                pass
+        # Extract data for each lens using helper functions
+        for lens_name in ['portfolio', 'benchmark', 'active']:
+            lens_data = _extract_lens_data_from_context(context, lens_name, asset_names, factor_names)
+            if lens_data:
+                node_data[lens_name] = lens_data
     
     except Exception as e:
         # Return empty data if extraction fails - don't break the entire process
