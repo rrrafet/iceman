@@ -144,14 +144,17 @@ class RiskSchemaFactory:
         RiskResultSchema
             Unified schema
         """
-        # Extract asset names from visitor or context
+        # Extract asset names from visitor's metric store - simplified approach
         asset_names = []
         factor_names = getattr(visitor, 'factor_names', [])
         
-        # Try to get asset names from visitor first
-        if hasattr(visitor, 'descendant_leaves') and visitor.descendant_leaves:
-            # Convert full paths to component names (e.g., "TOTAL/EQLIKE/EQ/EQDM/EQDMLC" -> "EQDMLC")
-            asset_names = [name.split('/')[-1] for name in visitor.descendant_leaves]
+        # Get asset names from visitor's metric store (stored during decomposition)
+        if hasattr(visitor, 'metric_store') and visitor.metric_store:
+            asset_names_metric = visitor.metric_store.get_metric(component_id, 'asset_names')
+            if asset_names_metric:
+                asset_names = asset_names_metric.value()
+                # Convert full paths to component names if needed (e.g., "TOTAL/EQLIKE/EQ/EQDM/EQDMLC" -> "EQDMLC")
+                asset_names = [name.split('/')[-1] if '/' in str(name) else str(name) for name in asset_names]
         
         # Create schema with proper asset names
         schema = RiskResultSchema(
@@ -160,43 +163,16 @@ class RiskSchemaFactory:
             factor_names=factor_names
         )
         
+        # Set component_ids to asset names if we have them
+        if asset_names:
+            schema.component_ids = asset_names.copy()
+        
         # Try to extract risk decomposition context for the component
         try:
             if hasattr(visitor, 'metric_store'):
                 context_metric = visitor.metric_store.get_metric(component_id, 'hierarchical_model_context')
                 if context_metric and hasattr(context_metric, 'value'):
                     hierarchical_context = context_metric.value()
-                    
-                    # Try to get better asset names from the context
-                    if hasattr(hierarchical_context, 'portfolio_decomposer'):
-                        decomposer = hierarchical_context.portfolio_decomposer
-                        
-                        # Extract asset names from various sources
-                        context_asset_names = []
-                        
-                        # Try from context
-                        if hasattr(decomposer, 'context') and hasattr(decomposer.context, 'get_asset_names'):
-                            context_asset_names = decomposer.context.get_asset_names()
-                        
-                        # Try from results structure
-                        if not context_asset_names and hasattr(decomposer, '_results'):
-                            if 'asset_names' in decomposer._results:
-                                context_asset_names = decomposer._results['asset_names']
-                            elif 'portfolio_weights' in decomposer._results:
-                                if isinstance(decomposer._results['portfolio_weights'], dict):
-                                    context_asset_names = list(decomposer._results['portfolio_weights'].keys())
-                        
-                        # Try from asset contributions
-                        if not context_asset_names and hasattr(decomposer, 'asset_total_contributions'):
-                            if isinstance(decomposer.asset_total_contributions, dict):
-                                context_asset_names = list(decomposer.asset_total_contributions.keys())
-                        
-                        if context_asset_names:
-                            # Convert full paths to component names if needed and update schema
-                            asset_names = [name.split('/')[-1] if '/' in str(name) else str(name) for name in context_asset_names]
-                            schema.asset_names = asset_names
-                            # Also set component_ids to full paths
-                            schema.component_ids = [str(name) for name in context_asset_names]
                     
                     # Extract data from all three decomposers to populate multi-lens structure
                     
@@ -304,11 +280,10 @@ class RiskSchemaFactory:
                         # Time series data should be provided separately to avoid coupling
                         # The caller can use schema.set_time_series_metadata() and related methods
                         # to populate time series data from their own sources
-        
-        except Exception:
-            # Fallback to empty schema if extraction fails
-            pass
-        
+
+        except Exception as e:
+            raise ValueError(f"Failed to extract hierarchical context for component '{component_id}': {e}")
+
         # **NEW: Optionally populate all hierarchical components**
         if populate_all_components and analysis_type == "hierarchical":
             try:
@@ -488,6 +463,356 @@ class RiskSchemaFactory:
             return schema
         else:
             return RiskSchemaFactory.create_empty_schema()
+    
+    @staticmethod
+    def from_visitor_direct_mapping(
+        visitor,
+        root_component_id: str,
+        map_full_hierarchy: bool = True
+    ) -> RiskResultSchema:
+        """
+        Create schema with direct mapping from visitor metric store.
+        
+        This method provides complete decoupling from visitor internals by only
+        accessing the metric store data populated during risk decomposition.
+        
+        Parameters
+        ----------
+        visitor : FactorRiskDecompositionVisitor
+            Visitor with completed risk analysis and populated metric store
+        root_component_id : str
+            Root component for the analysis
+        map_full_hierarchy : bool, default True
+            If True, map all processed components in the hierarchy
+            If False, only map the root component
+            
+        Returns
+        -------
+        RiskResultSchema
+            Schema with hierarchical risk data directly mapped from visitor
+        """
+        # Extract asset and factor names from visitor
+        asset_names = []
+        factor_names = getattr(visitor, 'factor_names', [])
+        
+        # Get asset names from visitor's metric store
+        if hasattr(visitor, 'metric_store') and visitor.metric_store:
+            asset_names_metric = visitor.metric_store.get_metric(root_component_id, 'asset_names')
+            if asset_names_metric:
+                asset_names = asset_names_metric.value()
+                # Clean asset names (remove path prefixes if present)
+                asset_names = [name.split('/')[-1] if '/' in str(name) else str(name) for name in asset_names]
+        
+        # Create base schema
+        schema = RiskResultSchema(
+            analysis_type=AnalysisType.HIERARCHICAL,
+            asset_names=asset_names,
+            factor_names=factor_names
+        )
+        
+        # Extract hierarchical data
+        if map_full_hierarchy:
+            hierarchical_data = _map_hierarchical_tree(visitor, root_component_id)
+        else:
+            node_data = _extract_node_risk_data(visitor, root_component_id, asset_names, factor_names)
+            hierarchical_data = {root_component_id: node_data} if node_data else {}
+        
+        # Set hierarchical data in schema
+        if hierarchical_data:
+            schema.set_hierarchical_risk_data(hierarchical_data)
+        
+        # Add metadata
+        schema.add_context_info('extraction_method', 'direct_mapping')
+        schema.add_context_info('visitor_type', type(visitor).__name__)
+        schema.add_context_info('root_component', root_component_id)
+        schema.add_context_info('components_mapped', len(hierarchical_data))
+        schema.add_context_info('mapping_mode', 'full_hierarchy' if map_full_hierarchy else 'single_component')
+        
+        return schema
+
+
+def _extract_node_risk_data(
+    visitor, 
+    component_id: str, 
+    asset_names: List[str], 
+    factor_names: List[str]
+) -> Dict[str, Any]:
+    """
+    Extract all risk data for a single component from visitor metric store.
+    
+    This function provides the core mapping logic to extract decomposer results
+    from the visitor's metric store without coupling to visitor internals.
+    
+    Parameters
+    ----------
+    visitor : FactorRiskDecompositionVisitor
+        Visitor with populated metric store
+    component_id : str
+        Component to extract data for
+    asset_names : list of str
+        Asset names for mapping contributions
+    factor_names : list of str
+        Factor names for mapping contributions
+        
+    Returns
+    -------
+    dict
+        Nested dictionary with risk data for all available lenses
+    """
+    node_data = {}
+    
+    try:
+        # Get hierarchical model context from metric store
+        context_metric = visitor.metric_store.get_metric(component_id, 'hierarchical_model_context')
+        if not context_metric:
+            # This might be a leaf component - check for individual risk models
+            portfolio_model = visitor.metric_store.get_metric(component_id, 'portfolio_risk_model')
+            benchmark_model = visitor.metric_store.get_metric(component_id, 'benchmark_risk_model') 
+            active_model = visitor.metric_store.get_metric(component_id, 'active_risk_model')
+            
+            if portfolio_model or benchmark_model or active_model:
+                # Extract data from individual models (leaf component)
+                return _extract_from_individual_models(visitor, component_id, asset_names, factor_names, 
+                                                     portfolio_model, benchmark_model, active_model)
+            else:
+                return node_data
+            
+        context = context_metric.value()
+        
+        # Extract portfolio lens data
+        if hasattr(context, 'portfolio_decomposer'):
+            try:
+                portfolio_decomposer = context.portfolio_decomposer
+                portfolio_summary = portfolio_decomposer.risk_decomposition_summary()
+                
+                node_data['portfolio'] = {
+                    'decomposer_results': {
+                        'total_risk': portfolio_summary.get('portfolio_volatility', 0.0),
+                        'factor_risk_contribution': portfolio_summary.get('factor_risk_contribution', 0.0),
+                        'specific_risk_contribution': portfolio_summary.get('specific_risk_contribution', 0.0),
+                        'factor_risk_percentage': portfolio_summary.get('factor_risk_percentage', 0.0),
+                        'specific_risk_percentage': portfolio_summary.get('specific_risk_percentage', 0.0)
+                    }
+                }
+                
+                # Factor contributions
+                if hasattr(portfolio_decomposer, 'factor_contributions') and portfolio_decomposer.factor_contributions is not None:
+                    if len(factor_names) == len(portfolio_decomposer.factor_contributions):
+                        node_data['portfolio']['factor_contributions'] = dict(zip(
+                            factor_names, 
+                            portfolio_decomposer.factor_contributions
+                        ))
+                
+                # Asset contributions  
+                if hasattr(portfolio_decomposer, 'asset_contributions') and portfolio_decomposer.asset_contributions is not None:
+                    if len(asset_names) == len(portfolio_decomposer.asset_contributions):
+                        node_data['portfolio']['asset_contributions'] = dict(zip(
+                            asset_names,
+                            portfolio_decomposer.asset_contributions
+                        ))
+                
+                # Factor exposures
+                if hasattr(portfolio_decomposer, 'portfolio_factor_exposure') and portfolio_decomposer.portfolio_factor_exposure is not None:
+                    if len(factor_names) == len(portfolio_decomposer.portfolio_factor_exposure):
+                        node_data['portfolio']['factor_exposures'] = dict(zip(
+                            factor_names,
+                            portfolio_decomposer.portfolio_factor_exposure
+                        ))
+                
+                # Weighted betas matrix
+                if hasattr(portfolio_decomposer, 'weighted_betas') and portfolio_decomposer.weighted_betas is not None:
+                    node_data['portfolio']['weighted_betas'] = _convert_matrix_to_dict(
+                        portfolio_decomposer.weighted_betas, asset_names, factor_names
+                    )
+                
+            except Exception as e:
+                # Portfolio decomposer failed - skip this lens
+                pass
+        
+        # Extract benchmark lens data
+        if hasattr(context, 'benchmark_decomposer'):
+            try:
+                benchmark_decomposer = context.benchmark_decomposer
+                benchmark_summary = benchmark_decomposer.risk_decomposition_summary()
+                
+                node_data['benchmark'] = {
+                    'decomposer_results': {
+                        'total_risk': benchmark_summary.get('portfolio_volatility', 0.0),
+                        'factor_risk_contribution': benchmark_summary.get('factor_risk_contribution', 0.0),
+                        'specific_risk_contribution': benchmark_summary.get('specific_risk_contribution', 0.0),
+                        'factor_risk_percentage': benchmark_summary.get('factor_risk_percentage', 0.0),
+                        'specific_risk_percentage': benchmark_summary.get('specific_risk_percentage', 0.0)
+                    }
+                }
+                
+                # Similar extraction for benchmark decomposer
+                if hasattr(benchmark_decomposer, 'factor_contributions') and benchmark_decomposer.factor_contributions is not None:
+                    if len(factor_names) == len(benchmark_decomposer.factor_contributions):
+                        node_data['benchmark']['factor_contributions'] = dict(zip(
+                            factor_names,
+                            benchmark_decomposer.factor_contributions
+                        ))
+                
+                if hasattr(benchmark_decomposer, 'portfolio_factor_exposure') and benchmark_decomposer.portfolio_factor_exposure is not None:
+                    if len(factor_names) == len(benchmark_decomposer.portfolio_factor_exposure):
+                        node_data['benchmark']['factor_exposures'] = dict(zip(
+                            factor_names,
+                            benchmark_decomposer.portfolio_factor_exposure
+                        ))
+                        
+            except Exception as e:
+                # Benchmark decomposer failed - skip this lens
+                pass
+        
+        # Extract active lens data  
+        if hasattr(context, 'active_decomposer'):
+            try:
+                active_decomposer = context.active_decomposer
+                active_summary = active_decomposer.risk_decomposition_summary()
+                
+                node_data['active'] = {
+                    'decomposer_results': {
+                        'total_risk': active_summary.get('portfolio_volatility', 0.0),
+                        'factor_risk_contribution': active_summary.get('factor_risk_contribution', 0.0),
+                        'specific_risk_contribution': active_summary.get('specific_risk_contribution', 0.0),
+                        'factor_risk_percentage': active_summary.get('factor_risk_percentage', 0.0),
+                        'specific_risk_percentage': active_summary.get('specific_risk_percentage', 0.0)
+                    }
+                }
+                
+                # Similar extraction for active decomposer
+                if hasattr(active_decomposer, 'factor_contributions') and active_decomposer.factor_contributions is not None:
+                    if len(factor_names) == len(active_decomposer.factor_contributions):
+                        node_data['active']['factor_contributions'] = dict(zip(
+                            factor_names,
+                            active_decomposer.factor_contributions
+                        ))
+                
+                if hasattr(active_decomposer, 'portfolio_factor_exposure') and active_decomposer.portfolio_factor_exposure is not None:
+                    if len(factor_names) == len(active_decomposer.portfolio_factor_exposure):
+                        node_data['active']['factor_exposures'] = dict(zip(
+                            factor_names,
+                            active_decomposer.portfolio_factor_exposure
+                        ))
+                        
+            except Exception as e:
+                # Active decomposer failed - skip this lens
+                pass
+    
+    except Exception as e:
+        # Return empty data if extraction fails - don't break the entire process
+        node_data = {}
+    
+    return node_data
+
+
+def _map_hierarchical_tree(visitor, root_component_id: str) -> Dict[str, Dict]:
+    """
+    Map entire component tree from visitor metric store data.
+    
+    Parameters
+    ----------
+    visitor : FactorRiskDecompositionVisitor
+        Visitor with populated metric store
+    root_component_id : str
+        Root component for the tree
+        
+    Returns
+    -------
+    dict
+        Dictionary mapping component_id -> risk_data for all processed components
+    """
+    hierarchical_data = {}
+    
+    # Get asset and factor names for mapping
+    asset_names = []
+    factor_names = getattr(visitor, 'factor_names', [])
+    
+    if hasattr(visitor, 'metric_store') and visitor.metric_store:
+        asset_names_metric = visitor.metric_store.get_metric(root_component_id, 'asset_names')
+        if asset_names_metric:
+            asset_names = asset_names_metric.value()
+            asset_names = [name.split('/')[-1] if '/' in str(name) else str(name) for name in asset_names]
+    
+    # Get all processed components from visitor
+    processed_components = []
+    if hasattr(visitor, 'get_processed_components'):
+        processed_components = list(visitor.get_processed_components())
+    elif hasattr(visitor, '_processed_components'):
+        processed_components = list(visitor._processed_components)
+    
+    # If no processed components found, try to find all components with hierarchical_model_context
+    if not processed_components and hasattr(visitor, 'metric_store') and visitor.metric_store:
+        # We need a different approach since metric_store doesn't expose internal structure
+        # Try to get components from the portfolio graph if available
+        if hasattr(visitor, 'portfolio_graph') and visitor.portfolio_graph:
+            for comp_id in visitor.portfolio_graph.components.keys():
+                if visitor.metric_store.get_metric(comp_id, 'hierarchical_model_context'):
+                    processed_components.append(comp_id)
+    
+    # Extract data for all processed components
+    for component_id in processed_components:
+        node_data = _extract_node_risk_data(visitor, component_id, asset_names, factor_names)
+        if node_data:
+            hierarchical_data[component_id] = node_data
+    
+    return hierarchical_data
+
+
+def _convert_matrix_to_dict(matrix, row_names: List[str], col_names: List[str]) -> Dict[str, Dict[str, float]]:
+    """
+    Convert a numpy matrix to nested dictionary format for UI consumption.
+    
+    Parameters
+    ----------
+    matrix : np.ndarray
+        Matrix to convert
+    row_names : list of str
+        Names for matrix rows
+    col_names : list of str
+        Names for matrix columns
+        
+    Returns
+    -------
+    dict
+        Nested dictionary: {row_name: {col_name: value}}
+    """
+    if matrix is None or matrix.size == 0:
+        return {}
+    
+    try:
+        import numpy as np
+        
+        if matrix.ndim == 2:
+            n_rows, n_cols = matrix.shape
+            
+            # Use provided names or generate defaults
+            if len(row_names) != n_rows:
+                row_names = [f"row_{i}" for i in range(n_rows)]
+            if len(col_names) != n_cols:
+                col_names = [f"col_{i}" for i in range(n_cols)]
+            
+            return {
+                row_name: {
+                    col_name: float(matrix[i, j])
+                    for j, col_name in enumerate(col_names)
+                }
+                for i, row_name in enumerate(row_names)
+            }
+        elif matrix.ndim == 1:
+            # Vector case - convert to single row
+            if len(col_names) == len(matrix):
+                return {
+                    "values": {
+                        col_name: float(matrix[i])
+                        for i, col_name in enumerate(col_names)
+                    }
+                }
+        
+        return {}
+        
+    except Exception:
+        return {}
 
 
 # Convenience functions for quick schema creation
@@ -724,3 +1049,140 @@ def _extract_time_series_from_visitor(schema: RiskResultSchema, visitor, root_co
         import traceback
         schema.add_context_info('time_series_extraction_error', str(e))
         schema.add_context_info('time_series_extraction_traceback', traceback.format_exc())
+
+
+def _extract_from_individual_models(
+    visitor, 
+    component_id: str, 
+    asset_names: List[str], 
+    factor_names: List[str],
+    portfolio_model, 
+    benchmark_model, 
+    active_model
+) -> Dict[str, Any]:
+    """
+    Extract risk data from individual models stored in metric store (for leaf components).
+    
+    Parameters
+    ----------
+    visitor : FactorRiskDecompositionVisitor
+        Visitor with populated metric store
+    component_id : str
+        Component to extract data for
+    asset_names : list of str
+        Asset names for mapping contributions
+    factor_names : list of str
+        Factor names for mapping contributions
+    portfolio_model, benchmark_model, active_model
+        Individual model metrics from metric store
+        
+    Returns
+    -------
+    dict
+        Nested dictionary with risk data for available lenses
+    """
+    node_data = {}
+    
+    try:
+        # Import RiskDecomposer and context creators
+        from .decomposer import RiskDecomposer
+        from .context import create_single_model_context, create_active_risk_context
+        
+        # Extract portfolio lens data if portfolio model exists
+        if portfolio_model:
+            try:
+                model = portfolio_model.value()
+                # For leaf components, we need to get weights - they should be 1.0 for the single asset
+                weights = np.array([1.0])  # Leaf components represent single assets with weight 1.0
+                
+                # Create single model context and decomposer
+                context = create_single_model_context(model, weights, annualize=True)
+                decomposer = RiskDecomposer(context)
+                
+                # Extract risk data similar to hierarchical approach
+                node_data['portfolio'] = {
+                    'decomposer_results': {
+                        'total_risk': decomposer.portfolio_volatility or 0.0,
+                        'factor_risk_contribution': decomposer.factor_risk_contribution or 0.0,
+                        'specific_risk_contribution': decomposer.specific_risk_contribution or 0.0,
+                        'factor_risk_percentage': (decomposer.factor_risk_contribution / decomposer.portfolio_volatility * 100) if decomposer.portfolio_volatility and decomposer.portfolio_volatility > 0 else 0.0,
+                        'specific_risk_percentage': (decomposer.specific_risk_contribution / decomposer.portfolio_volatility * 100) if decomposer.portfolio_volatility and decomposer.portfolio_volatility > 0 else 0.0,
+                    }
+                }
+                
+                # Add factor contributions if available
+                if hasattr(decomposer, 'factor_contributions') and decomposer.factor_contributions is not None:
+                    factor_contributions = decomposer.factor_contributions
+                    if hasattr(factor_contributions, '__len__') and len(factor_names) == len(factor_contributions):
+                        node_data['portfolio']['factor_contributions'] = dict(zip(factor_names, factor_contributions))
+                
+                # Add factor exposures if available
+                if hasattr(decomposer, 'portfolio_factor_exposure') and decomposer.portfolio_factor_exposure is not None:
+                    factor_exposures = decomposer.portfolio_factor_exposure
+                    if hasattr(factor_exposures, '__len__') and len(factor_names) == len(factor_exposures):
+                        node_data['portfolio']['factor_exposures'] = dict(zip(factor_names, factor_exposures))
+                        
+            except Exception as e:
+                # Log error but continue
+                node_data['portfolio'] = {'error': f'Failed to extract portfolio data: {str(e)}'}
+        
+        # Extract benchmark lens data if benchmark model exists  
+        if benchmark_model:
+            try:
+                model = benchmark_model.value()
+                weights = np.array([1.0])
+                
+                context = create_single_model_context(model, weights, annualize=True)
+                decomposer = RiskDecomposer(context)
+                
+                node_data['benchmark'] = {
+                    'decomposer_results': {
+                        'total_risk': decomposer.portfolio_volatility or 0.0,
+                        'factor_risk_contribution': decomposer.factor_risk_contribution or 0.0,
+                        'specific_risk_contribution': decomposer.specific_risk_contribution or 0.0,
+                    }
+                }
+                
+                if hasattr(decomposer, 'factor_contributions') and decomposer.factor_contributions is not None:
+                    factor_contributions = decomposer.factor_contributions
+                    if hasattr(factor_contributions, '__len__') and len(factor_names) == len(factor_contributions):
+                        node_data['benchmark']['factor_contributions'] = dict(zip(factor_names, factor_contributions))
+                        
+            except Exception as e:
+                node_data['benchmark'] = {'error': f'Failed to extract benchmark data: {str(e)}'}
+        
+        # Extract active lens data if both portfolio and benchmark models exist
+        if portfolio_model and benchmark_model:
+            try:
+                port_model = portfolio_model.value()
+                bench_model = benchmark_model.value()
+                port_weights = np.array([1.0])
+                bench_weights = np.array([1.0])
+                
+                context = create_active_risk_context(
+                    port_model, bench_model, port_weights, bench_weights, 
+                    active_model.value() if active_model else None, annualize=True
+                )
+                decomposer = RiskDecomposer(context)
+                
+                node_data['active'] = {
+                    'decomposer_results': {
+                        'total_risk': decomposer.portfolio_volatility or 0.0,
+                        'factor_risk_contribution': decomposer.factor_risk_contribution or 0.0,
+                        'specific_risk_contribution': decomposer.specific_risk_contribution or 0.0,
+                    }
+                }
+                
+                if hasattr(decomposer, 'factor_contributions') and decomposer.factor_contributions is not None:
+                    factor_contributions = decomposer.factor_contributions
+                    if hasattr(factor_contributions, '__len__') and len(factor_names) == len(factor_contributions):
+                        node_data['active']['factor_contributions'] = dict(zip(factor_names, factor_contributions))
+                        
+            except Exception as e:
+                node_data['active'] = {'error': f'Failed to extract active data: {str(e)}'}
+                
+    except Exception as e:
+        # Return partial data with error info
+        node_data['extraction_error'] = str(e)
+    
+    return node_data

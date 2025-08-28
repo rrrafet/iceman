@@ -80,8 +80,13 @@ class RiskDecomposer(RiskDecomposerBase):
         # Determine the lens based on context type
         if hasattr(context, 'analysis_type'):
             lens = context.analysis_type.lower() if context.analysis_type else 'portfolio'
+        elif hasattr(context, 'benchmark_model') and hasattr(context, 'benchmark_weights') and context.benchmark_weights is not None:
+            # This is an active risk context (MultiModelContext with benchmark data)
+            lens = 'active'
         else:
             lens = 'portfolio'
+        
+        self._current_lens = lens  # Store for property access
         
         # Cache commonly accessed properties from schema
         core_metrics = self._schema._data.get(lens, {}).get('core_metrics', {})
@@ -108,6 +113,7 @@ class RiskDecomposer(RiskDecomposerBase):
             'portfolio_weights': self._weights.get('portfolio_weights', {}),
             'weighted_betas': self._matrices.get('weighted_betas', {}),
             'asset_by_factor_contributions': self._matrices.get('factor_risk_contributions', {}),
+            'portfolio_factor_exposure': self._matrices.get('factor_exposures', {}),  # Add missing exposure data
         }
     
     # =========================================================================
@@ -153,7 +159,26 @@ class RiskDecomposer(RiskDecomposerBase):
         np.ndarray
             Array of factor exposures (K factors)
         """
-        return self._results['portfolio_factor_exposure']
+        # Extract factor exposures from schema data
+        import numpy as np
+        
+        # Try to get exposures from the schema matrices section
+        exposures_dict = self._matrices.get('factor_exposures', {})
+        
+        if isinstance(exposures_dict, dict) and exposures_dict:
+            # Convert dict of {factor_name: exposure_value} to array
+            return np.array(list(exposures_dict.values()))
+        else:
+            # Check if the data is stored in a different location
+            lens_data = self._schema._data.get(self._current_lens, {})
+            exposures = lens_data.get('exposures', {}).get('factor_exposures', {})
+            
+            if isinstance(exposures, dict) and exposures:
+                return np.array(list(exposures.values()))
+            else:
+                # Return empty array with proper shape
+                n_factors = len(self._schema.factor_names) if hasattr(self._schema, 'factor_names') else 0
+                return np.zeros(n_factors)
     
     @property
     def factor_risk_contribution(self) -> float:
@@ -198,7 +223,17 @@ class RiskDecomposer(RiskDecomposerBase):
         np.ndarray
             Array of asset contributions (N assets, volatility units)
         """
-        return self._asset_total_contributions
+        # Convert dict to numpy array if needed
+        if isinstance(self._asset_total_contributions, dict):
+            import numpy as np
+            if self._asset_total_contributions:
+                return np.array(list(self._asset_total_contributions.values()))
+            else:
+                return np.array([])
+        else:
+            # Already an array or convertible
+            import numpy as np
+            return np.asarray(self._asset_total_contributions)
     
     @property
     def factor_contributions(self) -> np.ndarray:
@@ -213,7 +248,17 @@ class RiskDecomposer(RiskDecomposerBase):
         np.ndarray
             Array of factor contributions (K factors, volatility units)
         """
-        return self._factor_contributions
+        # Convert dict to numpy array if needed
+        if isinstance(self._factor_contributions, dict):
+            import numpy as np
+            if self._factor_contributions:
+                return np.array(list(self._factor_contributions.values()))
+            else:
+                return np.array([])
+        else:
+            # Already an array or convertible
+            import numpy as np
+            return np.asarray(self._factor_contributions)
     
     @property
     def marginal_factor_contributions(self) -> np.ndarray:

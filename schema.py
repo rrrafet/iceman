@@ -1240,6 +1240,14 @@ class RiskResultSchema:
         """Get list of all components with hierarchical risk data."""
         return list(self._data.get("hierarchical_risk_data", {}).keys())
     
+    def get_hierarchical_risk_data(self) -> Dict[str, Dict[str, Any]]:
+        """Get all hierarchical risk data."""
+        return self._data.get("hierarchical_risk_data", {})
+    
+    def set_hierarchical_risk_data(self, hierarchical_data: Dict[str, Dict[str, Any]]) -> None:
+        """Set hierarchical risk data."""
+        self._data["hierarchical_risk_data"] = hierarchical_data
+    
     def get_component_children(self, component_id: str) -> List[str]:
         """Get direct children of a component from hierarchy."""
         hierarchy = self._data.get("hierarchy", {})
