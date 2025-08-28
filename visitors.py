@@ -1302,25 +1302,26 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         Export visitor results to unified schema format for a specific component.
         
         This method extracts the risk decomposition results from the visitor
-        and converts them to the standardized unified schema format.
+        and converts them to the standardized unified schema format using
+        the hierarchical extraction method.
         
         Parameters
         ----------
         component_id : str
-            Component ID to extract results for
+            Component ID to extract results for (typically root component)
             
         Returns
         -------
         RiskResultSchema
-            Visitor results in unified schema format
+            Visitor results in unified schema format with comprehensive data
         """
         from spark.risk.schema_factory import RiskSchemaFactory
         
         # Use factory method to create schema from visitor results
-        return RiskSchemaFactory.from_visitor_results(
+        return RiskSchemaFactory.from_factor_risk_decomposition_visitor(
             visitor=self,
-            component_id=component_id,
-            analysis_type='hierarchical'
+            root_component_id=component_id,
+            map_full_hierarchy=True
         )
 
 
