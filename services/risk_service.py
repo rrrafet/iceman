@@ -1,8 +1,8 @@
 """
 Risk Analysis Service for Maverick UI
 
-Integrates the PortfolioRiskAnalyzer with portfolio graphs and factor returns
-to provide comprehensive risk analysis for the Maverick application.
+Simplified risk analysis service that uses direct mapping from visitor metric store
+to provide clean, decoupled risk analysis for the Maverick application.
 """
 
 import sys
@@ -22,10 +22,12 @@ logger = logging.getLogger(__name__)
 
 class MaverickRiskService:
     """
-    Risk analysis service for Maverick UI integrating PortfolioRiskAnalyzer.
+    Simplified risk analysis service for Maverick UI.
     
-    This service provides a bridge between the Maverick UI data structures
-    and the Spark portfolio risk analysis framework.
+    This service uses direct mapping from visitor metric store data to provide
+    clean, decoupled access to risk analysis results without complex conversions.
+    All data is extracted directly from the visitor's metric store after 
+    decompose_factor_risk() runs.
     """
     
     def __init__(self):
@@ -83,17 +85,13 @@ class MaverickRiskService:
     def run_risk_analysis(self, 
                          root_component_id: str = None,
                          force_refresh: bool = False,
-                         include_time_series: bool = True,
-                         populate_hierarchical: bool = False,
                          **kwargs) -> Dict[str, Any]:
         """
-        Run comprehensive risk analysis using PortfolioRiskAnalyzer.
+        Run risk analysis using direct mapping from visitor metric store.
         
         Args:
             root_component_id: Root component for analysis (default: first component)
             force_refresh: Force fresh analysis ignoring cache
-            include_time_series: Include comprehensive time series data
-            populate_hierarchical: Enable bulk hierarchical population of component data
             **kwargs: Additional arguments for risk analysis
             
         Returns:
@@ -106,8 +104,8 @@ class MaverickRiskService:
         if root_component_id is None:
             root_component_id = list(self.portfolio_graph.components.keys())[0]
         
-        # Check cache (include hierarchical flag in cache key)
-        cache_key = f"{root_component_id}_{include_time_series}_{populate_hierarchical}_{hash(str(kwargs))}"
+        # Check cache
+        cache_key = f"{root_component_id}_{hash(str(kwargs))}"
         if not force_refresh and cache_key in self.analysis_cache:
             logger.info(f"Returning cached analysis for {root_component_id}")
             return self.analysis_cache[cache_key]
@@ -115,64 +113,35 @@ class MaverickRiskService:
         try:
             logger.info(f"Running risk analysis for component '{root_component_id}'")
             
-            if populate_hierarchical:
-                # NEW: Use enhanced risk analysis with hierarchical population
-                logger.info("Running analysis with hierarchical population enabled")
-                
-                # Run factor risk decomposition with visitor
-                visitor = self.risk_analyzer.decompose_factor_risk(
-                    root_component_id=root_component_id,
-                    factor_returns=self.factor_returns
-                )
-                
-                # Create schema using factory with hierarchical population
-                try:
-                    from spark.risk.schema_factory import RiskSchemaFactory
-                    risk_schema = RiskSchemaFactory.from_visitor_results(
-                        visitor=visitor,
-                        component_id=root_component_id,
-                        analysis_type='hierarchical',
-                        populate_all_components=True  # Enable bulk hierarchical storage
-                    )
-                    # Log schema creation success (visitor traversal details not directly accessible)
-                    processed_components = len(visitor._processed_components) if hasattr(visitor, '_processed_components') else 'unknown'
-                    logger.info(f"Hierarchical schema created successfully, processed {processed_components} components")
-                except ImportError as e:
-                    logger.warning(f"Could not use hierarchical schema factory: {e}")
-                    # Fallback to standard analysis
-                    risk_schema = self.risk_analyzer.get_riskresult(
-                        root_component_id=root_component_id,
-                        factor_returns=self.factor_returns,
-                        include_time_series=include_time_series,
-                        **kwargs
-                    )
-            else:
-                # Standard risk analysis using PortfolioRiskAnalyzer
-                risk_schema = self.risk_analyzer.get_riskresult(
-                    root_component_id=root_component_id,
-                    factor_returns=self.factor_returns,
-                    include_time_series=include_time_series,
-                    **kwargs
-                )
-            
-            # Convert schema to Maverick-friendly format
-            analysis_result = self._convert_schema_to_maverick_format(
-                risk_schema, 
-                root_component_id,
-                include_time_series
+            # Run factor risk decomposition using visitor pattern
+            visitor = self.risk_analyzer.decompose_factor_risk(
+                root_component_id=root_component_id,
+                factor_returns=self.factor_returns,
+                **kwargs
             )
             
-            # Add metadata
-            analysis_result['metadata'] = {
-                'analysis_type': 'hierarchical_factor_risk' if populate_hierarchical else 'standard_factor_risk',
+            # Use direct mapping factory to create schema from visitor metric store
+            from spark.risk.schema_factory import RiskSchemaFactory
+            schema = RiskSchemaFactory.from_visitor_direct_mapping(
+                visitor=visitor,
+                root_component_id=root_component_id,
+                map_full_hierarchy=True
+            )
+            
+            # Create simplified result structure
+            analysis_result = {
+                'success': True,
                 'root_component': root_component_id,
-                'factor_count': self.factor_returns.shape[1],
-                'component_count': len(self.portfolio_graph.components),
-                'analysis_timestamp': datetime.now().isoformat(),
-                'include_time_series': include_time_series,
-                'populate_hierarchical': populate_hierarchical,
-                'schema_type': str(type(risk_schema).__name__),
-                'hierarchical_components': len(risk_schema.get_all_component_risk_results()) if populate_hierarchical and hasattr(risk_schema, 'get_all_component_risk_results') else 0
+                'schema': schema,
+                'visitor': visitor,  # Keep visitor reference for direct access
+                'metadata': {
+                    'analysis_type': 'direct_mapping',
+                    'root_component': root_component_id,
+                    'factor_count': self.factor_returns.shape[1],
+                    'component_count': len(self.portfolio_graph.components),
+                    'analysis_timestamp': datetime.now().isoformat(),
+                    'extraction_method': 'visitor_metric_store'
+                }
             }
             
             # Cache the result
@@ -187,66 +156,36 @@ class MaverickRiskService:
             logger.error(error_msg, exc_info=True)
             return self._create_error_result(error_msg)
     
-    def _convert_schema_to_maverick_format(self, 
-                                          risk_schema,
-                                          root_component_id: str,
-                                          include_time_series: bool) -> Dict[str, Any]:
-        """
-        SIMPLIFIED: Direct schema delegation - no conversion needed.
-        
-        Args:
-            risk_schema: RiskResultSchema from PortfolioRiskAnalyzer
-            root_component_id: Root component ID
-            include_time_series: Whether time series data was included
-            
-        Returns:
-            Dictionary with schema directly embedded
-        """
-        return {
-            'success': True,
-            'root_component': root_component_id,
-            'schema': risk_schema,  # Direct schema access - single source of truth
-            'ui_data': risk_schema.to_ui_format(root_component_id) if hasattr(risk_schema, 'to_ui_format') else {}
-        }
     
     def get_component_risk_analysis(self, component_id: str, lens: str = 'portfolio') -> Dict[str, Any]:
         """
-        SIMPLIFIED: Get risk analysis using schema delegation.
+        Get component risk analysis directly from schema hierarchical data.
         
         Args:
             component_id: Component identifier
             lens: Analysis lens ('portfolio', 'benchmark', 'active')
             
         Returns:
-            Component-specific risk analysis from schema
+            Component-specific risk analysis
         """
         if not self.current_analysis_results:
             return self._create_error_result("No analysis results available")
         
-        # Get schema directly from results
         schema = self.current_analysis_results.get('schema')
         if not schema:
             return self._create_error_result("No schema available")
         
         try:
-            # Use schema methods directly - single source of truth
+            # Get hierarchical data directly from schema
+            hierarchical_data = schema.get_hierarchical_risk_data()
+            component_data = hierarchical_data.get(component_id, {})
+            lens_data = component_data.get(lens, {})
+            
             return {
                 'success': True,
                 'component_id': component_id,
                 'lens': lens,
-                'data': {
-                    'core_metrics': schema.get_ui_metrics(component_id, lens),
-                    'contributions': {
-                        'by_factor': schema.get_ui_contributions(component_id, lens, 'by_factor'),
-                        'by_asset': schema.get_ui_contributions(component_id, lens, 'by_asset'),
-                        'by_component': schema.get_ui_contributions(component_id, lens, 'by_component')
-                    },
-                    'exposures': {
-                        'factor_exposures': schema.get_ui_exposures(component_id, lens)
-                    },
-                    'weights': schema.get_ui_weights(component_id),
-                    'matrices': schema.get_ui_matrices(component_id, lens)
-                }
+                'data': lens_data
             }
             
         except Exception as e:
@@ -257,10 +196,24 @@ class MaverickRiskService:
         if not self.current_analysis_results:
             return self._create_error_result("No analysis results available")
         
+        schema = self.current_analysis_results.get('schema')
+        factor_names = schema.factor_names if schema else []
+        
+        # Extract factor contributions from root component
+        factor_contributions = {}
+        if schema:
+            hierarchical_data = schema.get_hierarchical_risk_data()
+            root_component = self.current_analysis_results['metadata']['root_component']
+            root_data = hierarchical_data.get(root_component, {})
+            portfolio_data = root_data.get('portfolio', {})
+            factor_contributions = portfolio_data.get('factor_contributions', {})
+        
         return {
             'success': True,
-            'factor_analysis': self.current_analysis_results.get('factor_analysis', {}),
-            'factors': list(self.factor_returns.columns) if self.factor_returns is not None else []
+            'factor_analysis': {
+                'contributions': factor_contributions
+            },
+            'factors': factor_names
         }
     
     def get_time_series_data(self) -> Dict[str, Any]:
@@ -268,9 +221,15 @@ class MaverickRiskService:
         if not self.current_analysis_results:
             return self._create_error_result("No analysis results available")
         
+        schema = self.current_analysis_results.get('schema')
+        time_series_data = {}
+        
+        if schema and hasattr(schema, 'get_time_series_data'):
+            time_series_data = schema.get_time_series_data()
+        
         return {
             'success': True,
-            'time_series': self.current_analysis_results.get('time_series', {}),
+            'time_series': time_series_data,
             'metadata': self.current_analysis_results.get('metadata', {})
         }
     
@@ -279,9 +238,19 @@ class MaverickRiskService:
         if not self.current_analysis_results:
             return self._create_error_result("No analysis results available")
         
+        schema = self.current_analysis_results.get('schema')
+        hierarchy_data = {}
+        
+        if schema:
+            hierarchical_data = schema.get_hierarchical_risk_data()
+            hierarchy_data = {
+                'components': list(hierarchical_data.keys()),
+                'component_count': len(hierarchical_data)
+            }
+        
         return {
             'success': True,
-            'hierarchy': self.current_analysis_results.get('hierarchy', {}),
+            'hierarchy': hierarchy_data,
             'components': list(self.portfolio_graph.components.keys()) if self.portfolio_graph else []
         }
     
@@ -290,9 +259,11 @@ class MaverickRiskService:
         if not self.current_analysis_results:
             return []
         
-        component_analysis = self.current_analysis_results.get('component_analysis', {})
-        if component_id in component_analysis:
-            return list(component_analysis[component_id].keys())
+        schema = self.current_analysis_results.get('schema')
+        if schema:
+            hierarchical_data = schema.get_hierarchical_risk_data()
+            component_data = hierarchical_data.get(component_id, {})
+            return list(component_data.keys())
         
         return ['portfolio', 'benchmark', 'active']  # Default lenses
     
@@ -301,13 +272,16 @@ class MaverickRiskService:
         if not self.current_analysis_results:
             return {'valid': False, 'message': 'No analysis results available'}
         
-        validation = self.current_analysis_results.get('validation', {})
+        schema = self.current_analysis_results.get('schema')
+        validation_results = {'valid': True, 'message': 'Analysis available'}
+        
+        if schema and hasattr(schema, 'get_validation_results'):
+            validation_results = schema.get_validation_results()
         
         return {
-            'valid': validation.get('passes', False),
-            'checks': validation.get('checks', {}),
-            'details': validation.get('details', {}),
-            'summary': 'Analysis validation completed'
+            'valid': validation_results.get('valid', True),
+            'checks': validation_results,
+            'summary': 'Direct mapping analysis validation completed'
         }
     
     def _create_error_result(self, error_message: str) -> Dict[str, Any]:

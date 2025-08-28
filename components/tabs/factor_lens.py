@@ -81,8 +81,10 @@ def render_factor_contributions_chart(data_loader, sidebar_state, lens):
     
     st.markdown("**Factor Contributions**")
     
-    # Get factor contributions
-    factor_contribs = data_loader.get_contributions(lens, "by_factor")
+    # NEW: Get factor contributions using hierarchical schema
+    factor_contribs = data_loader.get_factor_contributions_from_schema(
+        sidebar_state.selected_node, lens
+    )
     
     if not factor_contribs:
         st.info(f"No factor contributions available for {lens} lens")
@@ -90,18 +92,21 @@ def render_factor_contributions_chart(data_loader, sidebar_state, lens):
     
     # Filter by selected factors if any
     if sidebar_state.selected_factors:
-        factor_contribs = data_loader.filter_data_by_factors(
-            factor_contribs, 
-            sidebar_state.selected_factors
-        )
+        factor_contribs = {
+            f: v for f, v in factor_contribs.items() 
+            if f in sidebar_state.selected_factors
+        }
     
     if not factor_contribs:
         st.info("No factor contributions to display with current filter")
         return
     
+    # Convert to bps for display
+    factor_contribs_bps = {f: v * 10000 for f, v in factor_contribs.items()}
+    
     # Sort by absolute value
     sorted_contribs = sorted(
-        factor_contribs.items(), 
+        factor_contribs_bps.items(), 
         key=lambda x: abs(x[1]), 
         reverse=True
     )
@@ -143,8 +148,8 @@ def render_factor_exposures_chart(data_loader, sidebar_state, lens):
     
     st.markdown("**Factor Exposures**")
     
-    # Get factor exposures
-    exposures = data_loader.get_exposures(lens)
+    # NEW: Get factor exposures using hierarchical schema
+    exposures = data_loader.get_exposures(lens, sidebar_state.selected_node)
     
     if not exposures:
         st.info(f"No factor exposures available for {lens} lens")
@@ -152,10 +157,10 @@ def render_factor_exposures_chart(data_loader, sidebar_state, lens):
     
     # Filter by selected factors if any
     if sidebar_state.selected_factors:
-        exposures = data_loader.filter_data_by_factors(
-            exposures,
-            sidebar_state.selected_factors
-        )
+        exposures = {
+            f: v for f, v in exposures.items() 
+            if f in sidebar_state.selected_factors
+        }
     
     if not exposures:
         st.info("No factor exposures to display with current filter")
@@ -234,8 +239,10 @@ def render_factor_over_time(data_loader, sidebar_state):
     if sidebar_state.selected_factors:
         default_factors = sidebar_state.selected_factors[:3]  # Limit to top 3
     else:
-        # Get top contributing factors
-        factor_contribs = data_loader.get_contributions(sidebar_state.lens, "by_factor")
+        # Get top contributing factors using hierarchical schema
+        factor_contribs = data_loader.get_factor_contributions_from_schema(
+            sidebar_state.selected_node, sidebar_state.lens
+        )
         if factor_contribs:
             sorted_factors = sorted(
                 factor_contribs.items(),
@@ -357,8 +364,13 @@ def render_factor_matrices(data_loader, sidebar_state):
     
     st.subheader("Factor Risk Matrix")
     
-    # Check for matrix data
-    factor_risk_matrix = data_loader.get_matrices("factor_risk_contributions")
+    # NEW: Check for matrix data using hierarchical schema
+    schema_data = data_loader.get_comprehensive_schema_data(sidebar_state.selected_node)
+    factor_risk_matrix = None
+    
+    if schema_data:
+        matrices_section = schema_data.get('matrices', {})
+        factor_risk_matrix = matrices_section.get('factor_risk_contributions', {})
     
     if factor_risk_matrix:
         st.info("Factor risk contribution matrix visualization coming soon")
@@ -381,18 +393,22 @@ def render_factor_matrices(data_loader, sidebar_state):
         at the component level across the portfolio hierarchy.
         """)
     
-    # Show what matrix data might be available
-    matrices = ["beta_matrix", "factor_risk_contributions", "covariance_matrix"]
-    
-    available_matrices = []
-    for matrix_type in matrices:
-        matrix_data = data_loader.get_matrices(matrix_type)
-        if matrix_data:
-            available_matrices.append(matrix_type)
-    
-    if available_matrices:
-        st.markdown("**Available Matrix Data:**")
-        for matrix in available_matrices:
-            st.markdown(f"• {matrix} (visualization coming soon)")
+    # Show what matrix data might be available using hierarchical schema
+    if schema_data:
+        matrices_section = schema_data.get('matrices', {})
+        arrays_section = schema_data.get('arrays', {})
+        
+        available_matrices = []
+        if matrices_section:
+            available_matrices.extend(matrices_section.keys())
+        if arrays_section:
+            available_matrices.extend([f"{k} (array)" for k in arrays_section.keys()])
+        
+        if available_matrices:
+            st.markdown("**Available Matrix/Array Data:**")
+            for matrix in available_matrices:
+                st.markdown(f"• {matrix} (visualization coming soon)")
+        else:
+            st.markdown("**No matrix data currently available**")
     else:
-        st.markdown("**No matrix data currently available**")
+        st.markdown("**No schema data available for matrix analysis**")
