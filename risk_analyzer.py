@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from .visitors import FactorRiskDecompositionVisitor
     from spark.risk.estimator import LinearRiskModelEstimator
     from spark.risk.schema import RiskResultSchema
-    from spark.risk.strategies import RiskAnalysisStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +52,8 @@ class PortfolioRiskAnalyzer:
     
     def __init__(self, 
                  portfolio_graph: 'PortfolioGraph',
-                 strategy: Optional['RiskAnalysisStrategy'] = None,
                  estimator: Optional['LinearRiskModelEstimator'] = None):
         self.portfolio_graph = portfolio_graph
-        self.strategy = strategy  # Will be set to default if None when needed
         self.estimator = estimator  # Will be set to default if None when needed
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
     
@@ -148,7 +145,7 @@ class PortfolioRiskAnalyzer:
         return visitor
     
     
-    def get_risk_summary(
+    def get_riskresult(
         self,
         root_component_id: str,
         factor_returns: pd.DataFrame,
@@ -157,11 +154,11 @@ class PortfolioRiskAnalyzer:
         **kwargs
     ) -> 'RiskResultSchema':
         """
-        Get a standardized risk summary for hierarchical portfolio analysis.
+        CONSOLIDATED: Get standardized risk results for hierarchical portfolio analysis.
         
+        Single method that consolidates all risk result retrieval patterns.
         Returns a unified schema with key risk metrics extracted from the
-        FactorRiskDecompositionVisitor results. Can optionally include
-        comprehensive time series and hierarchy data.
+        FactorRiskDecompositionVisitor results with optional comprehensive data.
         
         Parameters
         ----------
@@ -173,25 +170,25 @@ class PortfolioRiskAnalyzer:
             Risk model estimator
         include_time_series : bool, default False
             If True, creates comprehensive schema with time series and hierarchy data
-            If False, creates basic schema with risk decomposition only (backward compatible)
+            If False, creates basic schema with risk decomposition only
         **kwargs
             Additional arguments
             
         Returns
         -------
         RiskResultSchema
-            Standardized risk summary in unified schema format
+            Standardized risk results in unified schema format
         """
         if include_time_series:
-            # Use comprehensive approach
-            return self.get_comprehensive_schema(
+            # Use comprehensive approach with time series and hierarchy data
+            return self._get_comprehensive_riskresult(
                 root_component_id=root_component_id,
                 factor_returns=factor_returns,
                 estimator=estimator,
                 **kwargs
             )
         else:
-            # Use original approach for backward compatibility
+            # Use basic approach for lightweight analysis
             visitor = self.decompose_factor_risk(
                 root_component_id=root_component_id,
                 factor_returns=factor_returns, 
@@ -201,79 +198,104 @@ class PortfolioRiskAnalyzer:
             
             return self._extract_hierarchical_schema(visitor)
     
+    
     def _extract_hierarchical_schema(self, visitor: 'FactorRiskDecompositionVisitor') -> 'RiskResultSchema':
         """
         Extract standardized schema from hierarchical visitor results.
         
-        Converts the hierarchical visitor results into unified schema format.
+        Converts the hierarchical visitor results into unified schema format
+        and populates hierarchical risk data for all components.
         """
         from spark.risk.schema import RiskResultSchema, AnalysisType
         
         try:
-            # Get basic metrics from visitor
-            total_risk = getattr(visitor, 'total_active_risk', 0.0)
-            factor_risk = getattr(visitor, 'factor_risk_contribution', 0.0)
-            specific_risk = getattr(visitor, 'specific_risk_contribution', 0.0)
-            
-            # Get names
+            # Get names and component IDs from visitor
             factor_names = list(getattr(visitor, 'factor_names', []))
-            component_names = list(getattr(visitor, 'component_results', {}).keys())
             
-            # Create schema
+            # Get all processed component IDs from visitor
+            component_ids = []
+            if hasattr(visitor, '_processed_components'):
+                component_ids = list(visitor._processed_components)
+            elif hasattr(visitor, 'metric_store') and visitor.metric_store:
+                # Fallback: get components with hierarchical context
+                for comp_id in visitor.metric_store._metrics:
+                    if visitor.metric_store.get_metric(comp_id, 'hierarchical_model_context'):
+                        component_ids.append(comp_id)
+            
+            self.logger.info(f"Extracting hierarchical schema for {len(component_ids)} components")
+            
+            # Create comprehensive hierarchical schema
             schema = RiskResultSchema(
                 analysis_type=AnalysisType.HIERARCHICAL,
-                asset_names=component_names,  # For hierarchical, assets are components
+                asset_names=[],  # Will be populated from visitor data
                 factor_names=factor_names,
-                component_ids=component_names
+                component_ids=component_ids
             )
             
-            # Set core metrics
-            schema.set_core_metrics(
-                total_risk=total_risk,
-                factor_risk_contribution=factor_risk,
-                specific_risk_contribution=specific_risk
-            )
+            # **NEW: Use bulk hierarchical storage to populate ALL components' risk data**
+            population_summary = schema.populate_hierarchical_risk_data_from_visitor(visitor)
             
-            # Try to extract detailed contributions if available
-            try:
-                component_results = getattr(visitor, 'component_results', {})
-                if component_results:
-                    # Extract component contributions
-                    component_contrib = {}
-                    for comp_name, result in component_results.items():
-                        if hasattr(result, 'total_risk') or 'total_risk' in result:
-                            risk_val = getattr(result, 'total_risk', result.get('total_risk', 0.0))
-                            component_contrib[comp_name] = risk_val
+            self.logger.info(f"Hierarchical data population: {population_summary['components_processed']} components processed")
+            if population_summary['errors']:
+                self.logger.warning(f"Population errors: {population_summary['errors']}")
+            
+            # Extract asset names from populated data (descendant leaves)
+            asset_names = set()
+            if hasattr(visitor, 'get_node_unified_matrices'):
+                for component_id in component_ids:
+                    matrices = visitor.get_node_unified_matrices(component_id)
+                    if matrices and 'portfolio' in matrices:
+                        leaves = matrices['portfolio'].get('descendant_leaves', [])
+                        asset_names.update(leaves)
+            
+            schema.asset_names = list(asset_names)
+            
+            # Set hierarchy structure if portfolio graph is available
+            if self.portfolio_graph:
+                try:
+                    component_relationships = self._extract_component_relationships()
+                    component_metadata = self._extract_component_metadata() 
                     
-                    if component_contrib:
-                        schema.set_asset_contributions(component_contrib)
-                
-                # Try to extract factor exposures/contributions if available
-                if hasattr(visitor, 'factor_exposures'):
-                    factor_exposures = getattr(visitor, 'factor_exposures', {})
-                    if factor_exposures:
-                        schema.set_factor_exposures(factor_exposures)
-                
-                if hasattr(visitor, 'factor_contributions'):
-                    factor_contrib = getattr(visitor, 'factor_contributions', {})
-                    if factor_contrib:
-                        schema.set_factor_contributions(factor_contrib)
-                        
-            except Exception as extraction_error:
-                self.logger.debug(f"Could not extract detailed contributions: {extraction_error}")
+                    # Determine root component (first processed or from portfolio graph)
+                    root_component = component_ids[0] if component_ids else 'TOTAL'
+                    
+                    schema.set_hierarchy_structure(
+                        root_component=root_component,
+                        component_relationships=component_relationships,
+                        component_metadata=component_metadata,
+                        adjacency_list=self.portfolio_graph.adjacency_list
+                    )
+                    
+                    self.logger.info(f"Hierarchy structure set with root '{root_component}'")
+                    
+                except Exception as hierarchy_error:
+                    self.logger.warning(f"Could not set hierarchy structure: {hierarchy_error}")
             
-            # Add context information
+            # Add comprehensive context information
             schema.add_context_info('visitor_type', type(visitor).__name__)
-            schema.add_context_info('analysis_method', 'hierarchical_visitor')
-            schema.add_context_info('component_count', len(component_names))
+            schema.add_context_info('analysis_method', 'comprehensive_hierarchical')
+            schema.add_context_info('component_count', len(component_ids))
+            schema.add_context_info('population_summary', population_summary)
+            schema.add_context_info('extraction_timestamp', self.current_timestamp.isoformat())
             
-            # Add validation (basic check)
+            # Validate hierarchical completeness
+            completeness_validation = schema.validate_hierarchical_completeness()
+            schema.add_context_info('hierarchical_completeness', completeness_validation)
+            
+            # Set comprehensive validation results
             validation_results = {
-                'extraction_successful': True,
+                'extraction_successful': population_summary['success'],
                 'visitor_type': type(visitor).__name__,
-                'components_analyzed': len(component_names)
+                'components_analyzed': population_summary['components_processed'],
+                'lenses_populated': population_summary['lenses_populated'],
+                'errors': population_summary['errors'],
+                'hierarchical_complete': completeness_validation['complete'],
+                'completeness_percentage': completeness_validation['summary']['completeness_percentage']
             }
             schema.set_validation_results(validation_results)
+            
+            self.logger.info(f"Schema extraction completed: {validation_results['components_analyzed']} components, "
+                           f"{validation_results['completeness_percentage']:.1f}% complete")
             
             return schema
             
@@ -374,7 +396,7 @@ class PortfolioRiskAnalyzer:
             
         return metadata
     
-    def get_comprehensive_schema(
+    def _get_comprehensive_riskresult(
         self,
         root_component_id: str,
         factor_returns: pd.DataFrame,
@@ -382,7 +404,7 @@ class PortfolioRiskAnalyzer:
         **kwargs
     ) -> 'RiskResultSchema':
         """
-        Create comprehensive risk schema with all available data.
+        Create comprehensive risk results with all available data.
         
         This method combines data from all sources available to the analyzer:
         - Risk decomposition results from visitor
@@ -404,7 +426,7 @@ class PortfolioRiskAnalyzer:
         Returns
         -------
         RiskResultSchema
-            Comprehensive schema with risk results, time series, and hierarchy data
+            Comprehensive risk results with time series and hierarchy data
         """
         self.logger.info(f"Creating comprehensive schema for '{root_component_id}'")
         
@@ -639,7 +661,6 @@ class PortfolioRiskAnalyzer:
             if hasattr(decomposer, 'weighted_betas') and decomposer.weighted_betas is not None:
                 result["weighted_betas"] = self._convert_matrix_to_named_dict(
                     decomposer.weighted_betas, 
-                    decomposer, 
                     visitor,
                     component_id
                 )
@@ -647,7 +668,6 @@ class PortfolioRiskAnalyzer:
             if hasattr(decomposer, 'factor_loadings') and decomposer.factor_loadings is not None:
                 result["factor_loadings_matrix"] = self._convert_matrix_to_named_dict(
                     decomposer.factor_loadings,
-                    decomposer,
                     visitor, 
                     component_id
                 )
@@ -703,7 +723,6 @@ class PortfolioRiskAnalyzer:
     def _convert_matrix_to_named_dict(
         self,
         matrix: np.ndarray,
-        decomposer: Any,
         visitor: 'FactorRiskDecompositionVisitor',
         component_id: str
     ) -> Dict[str, Dict[str, float]]:

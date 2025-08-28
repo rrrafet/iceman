@@ -16,7 +16,7 @@ import time
 
 from .metrics import (
     Metric, MetricStore, Aggregator,
-    MultiMetricAggregator, WeightPathAggregator
+    MultiMetricAggregator, WeightPathAggregator, ObjectMetric
 )
 
 if TYPE_CHECKING:
@@ -353,13 +353,21 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
             # Store individual risk models in metric store
             if self.metric_store:
                 for return_type, model in leaf_models.items():
-                    from .metrics import ObjectMetric
                     self.metric_store.set_metric(
                         leaf.component_id, 
                         f'{return_type}_risk_model', 
                         ObjectMetric(model)
                     )
                 self.logger.debug(f"Stored risk models in metric store for {leaf.component_id}")
+        
+        # Store this leaf as its own asset name for simplified schema extraction
+        if self.metric_store:
+            self.metric_store.set_metric(
+                leaf.component_id, 
+                'asset_names', 
+                ObjectMetric([leaf.component_id])
+            )
+            self.logger.debug(f"Stored asset names for leaf {leaf.component_id}")
         
         # Store leaf's own weights and register with weight aggregator
         portfolio_weight = self._get_component_weight(leaf, 'portfolio_weight')
@@ -458,6 +466,15 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
             self._weight_aggregator.set_node_weight(node.component_id, 'portfolio', node_portfolio_weight)
             self._weight_aggregator.set_node_weight(node.component_id, 'benchmark', node_benchmark_weight)
         
+        # Store descendant asset names for this component for simplified schema extraction
+        if descendant_leaves and self.metric_store:
+            self.metric_store.set_metric(
+                node.component_id, 
+                'asset_names', 
+                ObjectMetric(descendant_leaves)
+            )
+            self.logger.debug(f"Stored {len(descendant_leaves)} asset names for node {node.component_id}")
+        
         # Calculate effective weights for descendants using weight aggregator
         self.logger.debug(f"Calculating effective weights for node {node.component_id}")
         self._calculate_effective_weights(node, descendant_leaves)
@@ -486,7 +503,6 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                 # Log comprehensive risk decomposition summary
                 self._log_decomposition_summary(hierarchical_context, node.component_id)
                 
-                from .metrics import ObjectMetric
                 self.metric_store.set_metric(
                     node.component_id,
                     'hierarchical_model_context',
