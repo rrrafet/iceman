@@ -38,7 +38,20 @@ def array_to_named_dict(
     if array is None:
         return {}
     
-    array = np.asarray(array).flatten()
+    # Handle case where input is already a dictionary
+    if isinstance(array, dict):
+        logger.debug("Input is already a dictionary, returning as-is")
+        return {str(k): float(v) if not isinstance(v, (dict, list)) else v for k, v in array.items()}
+    
+    # Handle case where input is a list or tuple
+    if isinstance(array, (list, tuple)):
+        array = np.array(array)
+    
+    try:
+        array = np.asarray(array).flatten()
+    except (ValueError, TypeError) as e:
+        logger.error(f"Cannot convert input to numpy array: {e}")
+        return {}
     
     if len(array) == 0:
         return {}
@@ -51,8 +64,21 @@ def array_to_named_dict(
         logger.warning(f"Insufficient names provided ({len(names)} names for {len(array)} array elements). "
                       f"Using fallback names with prefix '{fallback_prefix}'")
     
-    # Create dictionary
-    return {names[i]: float(array[i]) for i in range(len(array))}
+    # Create dictionary with robust type conversion
+    result = {}
+    for i in range(len(array)):
+        try:
+            value = array[i]
+            # Handle complex types that can't be converted to float
+            if isinstance(value, (dict, list, tuple)):
+                logger.warning(f"Skipping complex value at index {i}: {type(value)}")
+                continue
+            result[names[i]] = float(value)
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Could not convert array element at index {i} to float: {e}")
+            result[names[i]] = 0.0  # Use safe fallback
+    
+    return result
 
 
 def matrix_to_nested_dict(

@@ -92,13 +92,13 @@ class RiskSchemaFactory:
         schema.set_factor_analysis(factor_analysis)
         
         # Set global metadata
-        global_metadata = {
+        global_meta = {
             'factor_names': factor_names,
             'asset_names': asset_names_global,
             'components_mapped': len(hierarchical_data),
             'extraction_timestamp': pd.Timestamp.now().isoformat()
         }
-        schema.set_global_metadata(global_metadata)
+        schema.set_global_metadata(global_meta)
         
         logger.info(f"Hierarchical extraction completed: {len(hierarchical_data)} components mapped")
         return schema
