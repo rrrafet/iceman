@@ -77,26 +77,12 @@ def load_portfolio_from_config(config: PortfolioConfig, base_dir: str) -> Dict[s
     
     factor_returns = pd.read_parquet(factor_returns_path)
     
-    # Transform factor returns from long format to wide format if needed
-    if 'factor_name' in factor_returns.columns and 'date' in factor_returns.columns:
-        # Long format detected - pivot to wide format
-        value_column = 'value_column' if 'value_column' in factor_returns.columns else factor_returns.columns[-1]
-        factor_returns = factor_returns.pivot_table(
-            index='date', 
-            columns='factor_name', 
-            values=value_column, 
-            aggfunc='first'  # In case of duplicates, take first value
-        )
-        # Convert index to datetime and clean column names
-        factor_returns.index = pd.to_datetime(factor_returns.index)
-        factor_returns.columns.name = None
+    # Keep factor returns in long format - pivot will be done when needed for risk analysis
     
-    # Apply factor filtering if specified
+    # Apply factor filtering if specified (for long format data)
     factor_subset = config.analysis_settings.get('factor_subset')
-    if factor_subset:
-        available_factors = [col for col in factor_returns.columns if col in factor_subset]
-        if available_factors:
-            factor_returns = factor_returns[available_factors]
+    if factor_subset and 'factor_name' in factor_returns.columns:
+        factor_returns = factor_returns[factor_returns['factor_name'].isin(factor_subset)]
     
     # Create portfolio builder with settings from config
     builder = PortfolioBuilderMultiplicative(**config.builder_settings)
