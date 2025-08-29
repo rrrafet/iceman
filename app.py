@@ -23,6 +23,7 @@ try:
     from .components.tabs.correlations import render_correlations_tab
     from .components.tabs.validation import render_validation_tab
     from .components.tabs.data_management import render_data_management_tab
+    from .components.tabs.risk_decomposition import render_risk_decomposition_tab
 except ImportError:
     # Fall back to absolute imports (when run standalone)
     from data_loader import DataLoader
@@ -39,6 +40,7 @@ except ImportError:
     from components.tabs.correlations import render_correlations_tab
     from components.tabs.validation import render_validation_tab
     from components.tabs.data_management import render_data_management_tab
+    from components.tabs.risk_decomposition import render_risk_decomposition_tab
 
 def run():
     """Entry point for integration with main Spark UI launcher."""
@@ -52,43 +54,44 @@ def run():
     sidebar_state = render_sidebar(data_loader)
     
     # Main header
-    st.title("Maverick Risk Analysis")
+    st.title("Maverick")
     
     # Enhanced header with portfolio and risk analysis status
     col1, col2, col3 = st.columns([2, 2, 1])
     
-    with col1:
-        # Portfolio info
-        current_config = getattr(st.session_state, 'selected_portfolio_config', 'Default')
-        st.markdown(f"**Portfolio:** {current_config}")
+    # with col1:
+    #     # Portfolio info
+    #     current_config = getattr(st.session_state, 'selected_portfolio_config', 'Default')
+    #     #st.markdown(f"**Portfolio:** {current_config}")
         
-        # Show current component path
-        selected_node = sidebar_state.selected_node if hasattr(sidebar_state, 'selected_node') else "TOTAL"
-        st.caption(f"Path: {selected_node}")
+    #     # Show current component path
+    #     selected_node = sidebar_state.selected_node if hasattr(sidebar_state, 'selected_node') else "TOTAL"
+    #     #st.caption(f"Path: {selected_node}")
     
-    with col2:
-        # Risk model and analysis status
-        current_risk_model = getattr(st.session_state, 'selected_risk_model', 'None')
-        st.markdown(f"**Risk Model:** {current_risk_model}")
+    # with col2:
+    #     # Risk model and analysis status
+    #     current_risk_model = getattr(st.session_state, 'selected_risk_model', 'None')
+    #     #st.markdown(f"**Risk Model:** {current_risk_model}")
         
-        try:
-            risk_status = data_loader.get_risk_analysis_status()
-            if risk_status['analysis_completed']:
-                st.caption("Risk Analysis: Complete")
-            elif risk_status['ready_for_analysis']:
-                st.caption("Risk Analysis: Ready")
-            else:
-                st.caption("Risk Analysis: Waiting")
-        except:
-            st.caption("Risk Analysis: Unknown")
+    #     try:
+    #         risk_status = data_loader.get_risk_analysis_status()
+    #         if risk_status['analysis_completed']:
+    #             st.caption("Risk Analysis: Complete")
+    #         elif risk_status['ready_for_analysis']:
+    #             st.caption("Risk Analysis: Ready")
+    #         else:
+    #             st.caption("Risk Analysis: Waiting")
+    #     except:
+    #         st.caption("Risk Analysis: Unknown")
     
-    with col3:
-        st.success("Validated")
-        st.info("USD")
+    # with col3:
+    #     #st.success("Validated")
+    #     #st.info("USD")
     
     # Tab navigation
     tab_names = [
         "Overview",
+        "Risk Decomposition",
         # "Active Lens", 
         # "Hierarchy Explorer",
         # "Timeline",
@@ -108,7 +111,11 @@ def run():
     with tabs[0]:
         render_overview_tab(data_loader, sidebar_state)
     
-    # # Tab 2 - Active Lens
+    # Tab 2 - Risk Decomposition
+    with tabs[1]:
+        render_risk_decomposition_tab(data_loader, sidebar_state)
+    
+    # # Tab 3 - Active Lens
     # with tabs[1]:
     #     render_active_lens_tab(data_loader, sidebar_state)
     
