@@ -1,6 +1,10 @@
 """
 Risk Model Loader for Maverick UI
 
+DEPRECATED: This module is deprecated in favor of simplified factor returns 
+management directly in DataLoader. Factor returns are now expected to be 
+provided in long format with riskmodel_code column.
+
 Provides interface for loading and managing risk models from the spark-risk
 module registry system, with mock data generation for testing.
 """
