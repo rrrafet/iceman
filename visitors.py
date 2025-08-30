@@ -353,30 +353,30 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         # Calculate leaf-level risk using analyze_portfolio_risk() directly
         if analyze_portfolio_risk is not None:
             try:
-                # Portfolio risk analysis
+                # Portfolio risk analysis - for leaf, use weight=1.0 (full asset risk)
                 portfolio_result = analyze_portfolio_risk(
                     model=leaf_models['portfolio'],
-                    weights=np.array([portfolio_weight]),
+                    weights=np.array([1.0]),  # Full weight for individual asset risk
                     asset_names=[leaf.component_id],
                     factor_names=self.factor_names,
                     annualize=self.annualize
                 )
                 
-                # Benchmark risk analysis
+                # Benchmark risk analysis - for leaf, use weight=1.0 (full asset risk)
                 benchmark_result = analyze_portfolio_risk(
                     model=leaf_models['benchmark'],
-                    weights=np.array([benchmark_weight]),
+                    weights=np.array([1.0]),  # Full weight for individual asset risk
                     asset_names=[leaf.component_id],
                     factor_names=self.factor_names,
                     annualize=self.annualize
                 )
                 
-                # Active risk analysis
+                # Active risk analysis - for leaf, use weight=1.0 (full asset risk)
                 active_result = analyze_active_risk(
                     portfolio_model=leaf_models['portfolio'],
                     benchmark_model=leaf_models['benchmark'],
-                    portfolio_weights=np.array([portfolio_weight]),
-                    benchmark_weights=np.array([benchmark_weight]),
+                    portfolio_weights=np.array([1.0]),  # Full weight for individual asset risk
+                    benchmark_weights=np.array([1.0]),  # Full weight for individual asset risk
                     asset_names=[leaf.component_id],
                     factor_names=self.factor_names,
                     active_model=leaf_models['active'],
