@@ -3,7 +3,7 @@ import streamlit as st
 import plotly.express as px
 
 def render_overview_tab(data_loader, sidebar_state):
-    """Render Tab 1 - Overview (snapshot) using direct schema data access"""
+    """Render Tab 1 - Overview (snapshot) using simplified risk API with RiskResult access"""
     
 
     st.header(f"**Node:** {sidebar_state.selected_node}")

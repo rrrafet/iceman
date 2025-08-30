@@ -89,57 +89,6 @@ class RiskModelLoader:
             # Fallback to mock models
             self._create_fallback_models()
     
-    def _create_fallback_models(self):
-        """Create fallback models when spark-risk is not available."""
-        # Basic Fama-French model
-        self._available_models['fama_french_5'] = {
-            'source': 'mock',
-            'name': 'Fama-French 5 Factor',
-            'description': 'Classic Fama-French 5-factor model (Market, SMB, HML, RMW, CMA)',
-            'factors': ['Market', 'SMB', 'HML', 'RMW', 'CMA'],
-            'start_date': '2020-01-01',
-            'end_date': '2024-12-31',
-            'frequency': 'B',
-            'num_factors': 5
-        }
-        
-        # Macro factor model
-        self._available_models['macro_factors'] = {
-            'source': 'mock',
-            'name': 'Macro Factor Model',
-            'description': 'Macro-economic factor model (Market, Bonds, Dollar, Commodity, Credit)',
-            'factors': ['Market', 'Bonds', 'Dollar', 'Commodity', 'Credit'],
-            'start_date': '2020-01-01',
-            'end_date': '2024-12-31',
-            'frequency': 'B',
-            'num_factors': 5
-        }
-        
-        # Style factor model
-        self._available_models['style_factors'] = {
-            'source': 'mock',
-            'name': 'Equity Style Factors',
-            'description': 'Equity style factor model (Market, Value, Growth, Quality, Momentum, LowVol)',
-            'factors': ['Market', 'Value', 'Growth', 'Quality', 'Momentum', 'LowVol'],
-            'start_date': '2020-01-01',
-            'end_date': '2024-12-31',
-            'frequency': 'B',
-            'num_factors': 6
-        }
-        
-        # Sector factor model
-        self._available_models['sector_model'] = {
-            'source': 'mock',
-            'name': 'GICS Sector Model',
-            'description': 'GICS sector-based factor model with market and 11 sectors',
-            'factors': ['Market', 'Energy', 'Materials', 'Industrials', 'ConsumerDiscretionary',
-                       'ConsumerStaples', 'HealthCare', 'Financials', 'Technology',
-                       'Utilities', 'RealEstate', 'Communication'],
-            'start_date': '2020-01-01',
-            'end_date': '2024-12-31',
-            'frequency': 'B',
-            'num_factors': 12
-        }
     
     def get_available_models(self) -> List[Dict[str, Any]]:
         """Get list of all available risk models with metadata."""
