@@ -6,7 +6,7 @@ builder_settings:
   builder_class: "PortfolioBuilderMultiplicative"
   allow_shorts: true
   normalize_to_relative: true
-  proportional_renormalize: false
+  proportional_renormalize: true
   weight_reconcile_policy: "respect_children"
   delimiter: "/"
   root_id: "TOTAL"

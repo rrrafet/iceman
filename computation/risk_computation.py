@@ -218,7 +218,7 @@ class RiskComputation:
                 )
                 
                 if risk_result and hasattr(risk_result, 'value'):
-                    results[lens] = risk_result.value
+                    results[lens] = risk_result.value()
                 elif risk_result:
                     results[lens] = risk_result
                 
@@ -251,7 +251,7 @@ class RiskComputation:
             )
             
             if risk_result and hasattr(risk_result, 'value'):
-                return risk_result.value
+                return risk_result.value()
             elif risk_result:
                 return risk_result
             else:

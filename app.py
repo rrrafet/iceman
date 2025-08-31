@@ -151,50 +151,7 @@ def run():
     # Tab 2 - Risk Decomposition
     with tabs[1]:
         render_risk_decomposition_tab(data_access_service, sidebar_state)
-    
-    # # Tab 3 - Active Lens
-    # with tabs[1]:
-    #     render_active_lens_tab(data_loader, sidebar_state)
-    
-    # # Tab 3 - Hierarchy Explorer
-    # with tabs[2]:
-    #     render_hierarchy_explorer_tab(data_loader, sidebar_state)
-    
-    # # Tab 4 - Timeline
-    # with tabs[3]:
-    #     render_timeline_tab(data_loader, sidebar_state)
-    
-    # # Tab 5 - Factor Lens
-    # with tabs[4]:
-    #     render_factor_lens_tab(data_loader, sidebar_state)
-    
-    # # Tab 6 - Assets
-    # with tabs[5]:
-    #     render_assets_tab(data_loader, sidebar_state)
-    
-    # # Tab 7 - Weights & Tilts
-    # with tabs[6]:
-    #     render_weights_tilts_tab(data_loader, sidebar_state)
-    
-    # # Tab 8 - Decomposition
-    # with tabs[7]:
-    #     render_decomposition_tab(data_loader, sidebar_state)
-    
-    # # Tab 9 - Stats & Distributions
-    # with tabs[8]:
-    #     render_stats_distributions_tab(data_loader, sidebar_state)
-    
-    # # Tab 10 - Correlations
-    # with tabs[9]:
-    #     render_correlations_tab(data_loader, sidebar_state)
-    
-    # # Tab 11 - Validation
-    # with tabs[10]:
-    #     render_validation_tab(data_loader, sidebar_state)
-    
-    # # Tab 12 - Data Management
-    # with tabs[11]:
-    #     render_data_management_tab(data_loader, sidebar_state)
+
 
 def main():
     """Standalone entry point when running maverick directly."""
