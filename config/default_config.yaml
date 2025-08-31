@@ -1,0 +1,40 @@
+risk_model:
+  default: "macro1"
+  available:
+    - "macro1"
+
+portfolio:
+  default: "strategic_portfolio"
+  root_component_id: "TOTAL"
+
+analysis:
+  annualized: true
+  frequency: "daily"
+  currency: "USD"
+  risk_model_type: "factor_based"
+
+ui_defaults:
+  lens: "portfolio"
+  show_top_n_factors: 8
+  show_top_n_assets: 8
+  default_date_range: "latest_year"
+
+data_sources:
+  portfolio_data: "data/portfolio.parquet"
+  factor_returns: "data/factor_returns.parquet"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Advanced settings
+computation:
+  euler_identity_tolerance: 0.01
+  min_observations: 100
+  factor_exposure_threshold: 0.001
+
+# Data validation settings
+validation:
+  max_missing_data_pct: 5.0
+  min_portfolio_components: 3
+  max_hierarchy_depth: 10
