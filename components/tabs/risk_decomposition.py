@@ -23,28 +23,28 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
 from utils.formatters import format_basis_points, format_percentage, format_decimal, truncate_component_name
 from utils.colors import get_chart_color
 
-def render_risk_decomposition_tab(data_loader, sidebar_state):
+def render_risk_decomposition_tab(data_access_service, sidebar_state):
     """
     Main render function for Risk Decomposition tab.
     
     Parameters
     ----------
-    data_loader : DataLoader
-        The data loader instance providing schema access
+    data_access_service : DataAccessService
+        The data access service instance providing schema access
     sidebar_state : SidebarState
         Current sidebar filter selections
     """
     st.header("Risk Decomposition")
-    st.markdown(f"**Component:** {sidebar_state.selected_node} | **Lens:** {sidebar_state.lens.title()}")
+    st.markdown(f"**Component:** {sidebar_state.selected_component_id} | **Lens:** {sidebar_state.lens.title()}")
     
     # Data availability diagnostics
-    render_data_availability_diagnostics(data_loader, sidebar_state)
+    render_data_availability_diagnostics(data_access_service, sidebar_state)
     
     # Extract risk decomposition data for current selection
-    risk_data = extract_risk_decomposition_data(data_loader, sidebar_state.selected_node, sidebar_state.lens)
+    risk_data = extract_risk_decomposition_data(data_access_service, sidebar_state.selected_component_id, sidebar_state.lens)
     
     if not risk_data:
-        st.warning(f"Risk decomposition data not available for {sidebar_state.selected_node} ({sidebar_state.lens} lens)")
+        st.warning(f"Risk decomposition data not available for {sidebar_state.selected_component_id} ({sidebar_state.lens} lens)")
         st.info("This could mean risk analysis has not been run for this component/lens combination.")
         return
     
@@ -54,22 +54,22 @@ def render_risk_decomposition_tab(data_loader, sidebar_state):
     st.divider()
     
     # Row 2: Factor Analysis 
-    render_factor_analysis(risk_data, data_loader.get_factor_names())
+    render_factor_analysis(risk_data, data_access_service.get_available_factors())
     
     st.divider()
     
     # Row 3: Component Analysis Table
-    render_component_table(data_loader, sidebar_state)
+    render_component_table(data_access_service, sidebar_state)
     
     st.divider()
     
     # Row 4: Risk Matrices
-    render_risk_matrices(data_loader, sidebar_state)
+    render_risk_matrices(data_access_service, sidebar_state)
     
     st.divider()
     
     # Summary and Recommendations
-    render_summary_and_recommendations(risk_data, data_loader.get_factor_names())
+    render_summary_and_recommendations(risk_data, data_access_service.get_available_factors())
 
 
 # =====================================================================
@@ -229,24 +229,24 @@ def render_factor_data_table(factor_data: Dict[str, float], column_name: str, fo
 # ROW 3: COMPONENT ANALYSIS TABLE
 # =====================================================================
 
-def render_component_table(data_loader, sidebar_state):
+def render_component_table(data_access_service, sidebar_state):
     """
     Render Row 3: Component analysis table showing descendant components.
     
     Parameters
     ----------
-    data_loader : DataLoader
-        The data loader instance
+    data_access_service : DataAccessService
+        The data access service instance
     sidebar_state : SidebarState
         Current sidebar selections
     """
     st.subheader("Component Analysis")
     
     # Get child components
-    child_components = get_child_components(data_loader, sidebar_state.selected_node)
+    child_components = get_child_components(data_access_service, sidebar_state.selected_component_id)
     
     if not child_components:
-        st.info(f"No child components found for {sidebar_state.selected_node}")
+        st.info(f"No child components found for {sidebar_state.selected_component_id}")
         return
     
     # Build component analysis data
@@ -254,12 +254,17 @@ def render_component_table(data_loader, sidebar_state):
     
     for component_id in child_components:
         # Get component data for each lens
-        portfolio_data = data_loader.get_schema_data(component_id, 'portfolio') or {}
-        benchmark_data = data_loader.get_schema_data(component_id, 'benchmark') or {}
-        active_data = data_loader.get_schema_data(component_id, 'active') or {}
+        try:
+            portfolio_data = data_access_service.get_risk_decomposition(component_id, 'portfolio')
+            benchmark_data = data_access_service.get_risk_decomposition(component_id, 'benchmark')
+            active_data = data_access_service.get_risk_decomposition(component_id, 'active')
+        except:
+            portfolio_data = {}
+            benchmark_data = {}
+            active_data = {}
         
         # Determine if this is a node or leaf
-        is_leaf = len(get_child_components(data_loader, component_id)) == 0
+        is_leaf = len(get_child_components(data_access_service, component_id)) == 0
         component_type = "Leaf" if is_leaf else "Node"
         
         # Extract weights (assuming they're stored as proportions, convert to percentages)
@@ -298,14 +303,14 @@ def render_component_table(data_loader, sidebar_state):
 # ROW 4: RISK MATRICES
 # =====================================================================
 
-def render_risk_matrices(data_loader, sidebar_state):
+def render_risk_matrices(data_access_service, sidebar_state):
     """
     Render Row 4: Risk matrices showing weighted betas and factor risk contributions.
     
     Parameters
     ----------
-    data_loader : DataLoader
-        The data loader instance  
+    data_access_service : DataAccessService
+        The data access service instance  
     sidebar_state : SidebarState
         Current sidebar selections
     """
@@ -314,8 +319,8 @@ def render_risk_matrices(data_loader, sidebar_state):
     col1, col2 = st.columns(2)
     
     # Get child components and factor names
-    child_components = get_child_components(data_loader, sidebar_state.selected_node)
-    factor_names = data_loader.get_factor_names()
+    child_components = get_child_components(data_access_service, sidebar_state.selected_component_id)
+    factor_names = data_access_service.get_available_factors()
     
     if not child_components or not factor_names:
         st.info("Matrix visualization requires child components and factor data")
@@ -323,21 +328,21 @@ def render_risk_matrices(data_loader, sidebar_state):
     
     with col1:
         st.markdown("**Weighted Beta Contribution Matrix**")
-        render_weighted_beta_matrix(data_loader, child_components, factor_names)
+        render_weighted_beta_matrix(data_access_service, child_components, factor_names)
     
     with col2:
         st.markdown("**Factor Risk Contribution Matrix**")
-        render_factor_risk_matrix(data_loader, child_components, factor_names)
+        render_factor_risk_matrix(data_access_service, child_components, factor_names)
 
 
-def render_weighted_beta_matrix(data_loader, child_components: List[str], factor_names: List[str]):
+def render_weighted_beta_matrix(data_access_service, child_components: List[str], factor_names: List[str]):
     """
     Render weighted beta contribution matrix as heatmap.
     
     Parameters
     ----------
-    data_loader : DataLoader
-        The data loader instance
+    data_access_service : DataAccessService
+        The data access service instance
     child_components : List[str]
         List of child component IDs
     factor_names : List[str]
@@ -347,7 +352,10 @@ def render_weighted_beta_matrix(data_loader, child_components: List[str], factor
     matrix_data = []
     
     for component_id in child_components:
-        component_data = data_loader.get_schema_data(component_id, 'portfolio') or {}
+        try:
+            component_data = data_access_service.get_risk_decomposition(component_id, 'portfolio')
+        except:
+            component_data = {}
         weighted_betas = component_data.get('weighted_betas', {})
         
         row_data = []
@@ -372,14 +380,14 @@ def render_weighted_beta_matrix(data_loader, child_components: List[str], factor
         st.info("No weighted beta data available")
 
 
-def render_factor_risk_matrix(data_loader, child_components: List[str], factor_names: List[str]):
+def render_factor_risk_matrix(data_access_service, child_components: List[str], factor_names: List[str]):
     """
     Render factor risk contribution matrix as heatmap.
     
     Parameters
     ----------  
-    data_loader : DataLoader
-        The data loader instance
+    data_access_service : DataAccessService
+        The data access service instance
     child_components : List[str]
         List of child component IDs
     factor_names : List[str]
@@ -389,7 +397,10 @@ def render_factor_risk_matrix(data_loader, child_components: List[str], factor_n
     matrix_data = []
     
     for component_id in child_components:
-        component_data = data_loader.get_schema_data(component_id, 'portfolio') or {}
+        try:
+            component_data = data_access_service.get_risk_decomposition(component_id, 'portfolio')
+        except:
+            component_data = {}
         factor_contributions = component_data.get('factor_contributions', {})
         
         row_data = []
@@ -509,14 +520,14 @@ def render_summary_and_recommendations(risk_data: Dict[str, Any], factor_names: 
 # DATA AVAILABILITY DIAGNOSTICS
 # =====================================================================
 
-def render_data_availability_diagnostics(data_loader, sidebar_state):
+def render_data_availability_diagnostics(data_access_service, sidebar_state):
     """
     Render diagnostic information about data availability for debugging.
     
     Parameters
     ----------
-    data_loader : DataLoader
-        The data loader instance
+    data_access_service : DataAccessService
+        The data access service instance
     sidebar_state : SidebarState
         Current sidebar selections
     """
@@ -525,7 +536,7 @@ def render_data_availability_diagnostics(data_loader, sidebar_state):
         
         with col1:
             st.markdown("**Factor Names**")
-            factor_names = data_loader.get_factor_names()
+            factor_names = data_access_service.get_available_factors()
             if factor_names:
                 st.success(f"✅ {len(factor_names)} factors available")
                 st.text(", ".join(factor_names))
@@ -533,7 +544,10 @@ def render_data_availability_diagnostics(data_loader, sidebar_state):
                 st.error("❌ No factor names found")
             
             st.markdown("**Components**")
-            components = data_loader.get_all_components()
+            try:
+                components = list(data_access_service.risk_analysis_service._portfolio_graph.components.keys()) if data_access_service.risk_analysis_service._portfolio_graph else []
+            except:
+                components = []
             if components:
                 st.success(f"✅ {len(components)} components")
                 st.text(", ".join(components[:5]) + ("..." if len(components) > 5 else ""))
@@ -542,10 +556,13 @@ def render_data_availability_diagnostics(data_loader, sidebar_state):
         
         with col2:
             st.markdown("**Current Component Data**")
-            component_id = sidebar_state.selected_node
+            component_id = sidebar_state.selected_component_id
             lens = sidebar_state.lens
             
-            risk_data = data_loader.get_schema_data(component_id, lens)
+            try:
+                risk_data = data_access_service.get_risk_decomposition(component_id, lens)
+            except:
+                risk_data = {}
             if risk_data:
                 st.success(f"✅ {lens.title()} lens data available")
                 
@@ -575,14 +592,14 @@ def render_data_availability_diagnostics(data_loader, sidebar_state):
 # HELPER FUNCTIONS
 # =====================================================================
 
-def extract_risk_decomposition_data(data_loader, component_id: str, lens: str) -> Dict[str, Any]:
+def extract_risk_decomposition_data(data_access_service, component_id: str, lens: str) -> Dict[str, Any]:
     """
     Central data extraction function for risk decomposition.
     
     Parameters
     ----------
-    data_loader : DataLoader
-        The data loader instance
+    data_access_service : DataAccessService
+        The data access service instance
     component_id : str
         Component ID to analyze
     lens : str
@@ -593,17 +610,20 @@ def extract_risk_decomposition_data(data_loader, component_id: str, lens: str) -
     Dict[str, Any]
         Extracted risk decomposition data
     """
-    return data_loader.get_schema_data(component_id, lens) or {}
+    try:
+        return data_access_service.get_risk_decomposition(component_id, lens)
+    except Exception as e:
+        return {}
 
 
-def get_child_components(data_loader, component_id: str) -> List[str]:
+def get_child_components(data_access_service, component_id: str) -> List[str]:
     """
     Get child components for a given component.
     
     Parameters
     ----------
-    data_loader : DataLoader
-        The data loader instance
+    data_access_service : DataAccessService
+        The data access service instance
     component_id : str
         Parent component ID
         
@@ -613,7 +633,10 @@ def get_child_components(data_loader, component_id: str) -> List[str]:
         List of child component IDs
     """
     # Get all components and filter for children
-    all_components = data_loader.get_all_components()
+    try:
+        all_components = list(data_access_service.risk_analysis_service._portfolio_graph.components.keys()) if data_access_service.risk_analysis_service._portfolio_graph else []
+    except:
+        all_components = []
     
     # Simple heuristic: components that start with the parent component path + "/"
     child_pattern = f"{component_id}/"

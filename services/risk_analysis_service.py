@@ -8,9 +8,9 @@ import pandas as pd
 import logging
 from datetime import datetime
 
-from ..datamodels import FactorDataProvider, PortfolioDataProvider, RiskModelRegistry
-from ..computation import RiskComputation
-from .configuration_service import ConfigurationService
+from datamodels import FactorDataProvider, PortfolioDataProvider, RiskModelRegistry
+from computation import RiskComputation
+from services.configuration_service import ConfigurationService
 
 # Import portfolio graph and related classes
 try:

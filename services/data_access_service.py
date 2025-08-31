@@ -9,7 +9,7 @@ import numpy as np
 from datetime import datetime
 import logging
 
-from .risk_analysis_service import RiskAnalysisService
+from services.risk_analysis_service import RiskAnalysisService
 
 logger = logging.getLogger(__name__)
 
@@ -628,6 +628,23 @@ class DataAccessService:
         except Exception as e:
             logger.error(f"Error getting drawdown analysis for {component_id}/{return_type}: {e}")
             return {}
+    
+    def get_available_factors(self) -> List[str]:
+        """
+        Get list of available factor names.
+        
+        Returns:
+            List of factor names from the factor provider
+        """
+        try:
+            # Get default risk model to get factor names
+            risk_models = self.factor_provider.get_available_risk_models()
+            if risk_models:
+                return self.factor_provider.get_factor_names(risk_models[0])
+            return []
+        except Exception as e:
+            logger.error(f"Error getting available factors: {e}")
+            return []
     
     def get_service_status(self) -> Dict[str, Any]:
         """

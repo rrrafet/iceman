@@ -147,6 +147,42 @@ class ConfigurationService:
         """
         return self._config.get("risk_model", {}).get("available", ["macro1"])
     
+    def get_portfolio_name(self) -> str:
+        """
+        Get portfolio name for display.
+        
+        Returns:
+            Portfolio name
+        """
+        return self.get_default_portfolio()
+    
+    def get_default_lens(self) -> str:
+        """
+        Get default lens from UI settings.
+        
+        Returns:
+            Default lens ('portfolio', 'benchmark', 'active')
+        """
+        return self._config.get("ui_defaults", {}).get("lens", "portfolio")
+    
+    def get_currency(self) -> str:
+        """
+        Get currency from analysis settings.
+        
+        Returns:
+            Currency code (e.g., 'USD')
+        """
+        return self._config.get("analysis", {}).get("currency", "USD")
+    
+    def get_annualized_default(self) -> bool:
+        """
+        Get default annualized setting.
+        
+        Returns:
+            True if annualized by default
+        """
+        return self._config.get("analysis", {}).get("annualized", True)
+    
     def get_default_portfolio(self) -> str:
         """
         Get default portfolio name.
