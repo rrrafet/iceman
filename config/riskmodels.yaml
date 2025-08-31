@@ -1,5 +1,0 @@
-factor_risk_data_source: "data/factor_returns.parquet"
-factor_risk_data_source_columns:
-  - code_column: "riskmodel_code"
-  - name_column: "factor_name"
-  - value_column: "value_column"
