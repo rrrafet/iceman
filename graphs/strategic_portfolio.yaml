@@ -1,0 +1,69 @@
+name: "Strategic Portfolio"
+description: "Long-term strategic asset allocation with equity, fixed income, and overlay positions"
+
+# Configuration for Builder
+builder_settings:
+  builder_class: "PortfolioBuilderMultiplicative"
+  allow_shorts: true
+  normalize_to_relative: true
+  proportional_renormalize: false
+  weight_reconcile_policy: "respect_children"
+  delimiter: "/"
+  root_id: "TOTAL"
+
+# Data source configuration
+data_sources:
+  portfolio_data: "data/portfolio.parquet"
+
+# DataFrame column mappings
+data_structure:
+  component_id_column: "component_id"
+  date_column: "date"
+  portfolio_weight_column: "portfolio_weight"
+  benchmark_weight_column: "benchmark_weight"
+  portfolio_return_column: "portfolio_return"
+  benchmark_return_column: "benchmark_return"
+
+# Portfolio component hierarchy for builder
+components:
+  - path: "TOTAL"
+    component_type: "node"
+    is_overlay: false
+    name: "Total Portfolio"
+      
+  - path: "TOTAL/EQLIKE"
+    component_type: "node"
+    is_overlay: false
+    name: "Equity-Like Assets"
+
+  - path: "TOTAL/EQLIKE/EQDM"
+    component_type: "node"
+    is_overlay: false
+    name: "Developed Markets Equity"
+
+  - path: "TOTAL/EQLIKE/EQDM/EQDMSC"
+    component_type: "leaf"
+    is_overlay: false
+    name: "DM Small Cap Equity"
+
+  - path: "TOTAL/EQLIKE/EQDM/EQDMLC"
+    component_type: "leaf"
+    is_overlay: false
+    name: "DM Large Cap Equity"
+
+  - path: "TOTAL/IG"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Investment Grade Bonds"
+
+  - path: "TOTAL/CA"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Cash & Alternatives"
+
+  - path: "TOTAL/OVL"
+    component_type: "leaf"
+    is_overlay: true
+    name: "Overlay Strategies"
+
+

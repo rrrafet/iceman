@@ -15,12 +15,10 @@ from services.configuration_service import ConfigurationService
 # Import portfolio graph and related classes
 try:
     from spark.portfolio.graph import PortfolioGraph
-    from spark.portfolio.builders import HierarchicalPortfolioBuilder
     from spark.risk.risk_analysis import RiskResult
 except ImportError as e:
     logging.warning(f"Import error: {e}")
     PortfolioGraph = None
-    HierarchicalPortfolioBuilder = None
     RiskResult = None
 
 if TYPE_CHECKING:
@@ -150,45 +148,31 @@ class RiskAnalysisService:
             return False
     
     def _build_portfolio_graph(self) -> bool:
-        """Build portfolio graph from data provider."""
-        if PortfolioGraph is None or HierarchicalPortfolioBuilder is None:
-            logger.error("Portfolio graph classes not available")
-            return False
-        
+        """Get portfolio graph from YAML-based data provider."""
         try:
-            # Create portfolio graph
-            root_component_id = self.config_service.get_root_component_id()
-            self._portfolio_graph = PortfolioGraph(root_id=root_component_id)
+            # Get the pre-built PortfolioGraph from the portfolio provider
+            self._portfolio_graph = self.portfolio_provider.get_portfolio_graph()
             
-            # Get component hierarchy from portfolio provider
-            hierarchy = self.portfolio_provider.get_component_hierarchy()
-            all_components = self.portfolio_provider.get_all_component_ids()
-            leaf_components = self.portfolio_provider.get_leaf_components()
+            if self._portfolio_graph is None:
+                logger.error("Portfolio provider did not build a PortfolioGraph")
+                return False
             
-            # Add components to graph (simplified construction)
-            for component_id in all_components:
-                is_leaf = component_id in leaf_components
-                
-                if is_leaf:
-                    from spark.portfolio.components import PortfolioLeaf
-                    component = PortfolioLeaf(component_id)
-                else:
-                    from spark.portfolio.components import PortfolioNode
-                    component = PortfolioNode(component_id)
-                
-                self._portfolio_graph.add_component(component)
+            # Validate the graph has components
+            if not self._portfolio_graph.components:
+                logger.error("PortfolioGraph has no components")
+                return False
             
-            # Add relationships
-            for parent_id, children_ids in hierarchy.items():
-                for child_id in children_ids:
-                    self._portfolio_graph.add_edge(parent_id, child_id)
+            # Get portfolio metadata for logging
+            metadata = self.portfolio_provider.get_portfolio_metadata()
+            portfolio_name = metadata.get('name', 'Unknown')
             
-            logger.info(f"Built portfolio graph with {len(all_components)} components, "
-                       f"{len(hierarchy)} parent-child relationships")
+            logger.info(f"Retrieved PortfolioGraph for '{portfolio_name}' with "
+                       f"{len(self._portfolio_graph.components)} components")
+            
             return True
             
         except Exception as e:
-            logger.error(f"Portfolio graph construction failed: {e}")
+            logger.error(f"Failed to get PortfolioGraph from provider: {e}")
             return False
     
     def _setup_risk_computation(self) -> bool:

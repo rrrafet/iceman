@@ -20,7 +20,7 @@ ui_defaults:
   default_date_range: "latest_year"
 
 data_sources:
-  portfolio_data: "data/portfolio.parquet"
+  portfolio_config: "graphs/strategic_portfolio.yaml"
   factor_returns: "data/factor_returns.parquet"
 
 logging:

@@ -45,7 +45,7 @@ def initialize_services():
         )
         
         portfolio_provider = PortfolioDataProvider(
-            os.path.join(os.path.dirname(__file__), data_sources.get('portfolio_data', 'data/portfolio.parquet'))
+            os.path.join(os.path.dirname(__file__), data_sources.get('portfolio_config', 'graphs/strategic_portfolio.yaml'))
         )
         
         # Initialize risk analysis service
@@ -54,6 +54,10 @@ def initialize_services():
             factor_provider=factor_provider,
             portfolio_provider=portfolio_provider
         )
+        
+        # Initialize the risk analysis service (builds portfolio graph, etc.)
+        if not risk_analysis_service.initialize():
+            raise RuntimeError("Failed to initialize risk analysis service")
         
         # Initialize data access service
         data_access_service = DataAccessService(risk_analysis_service)

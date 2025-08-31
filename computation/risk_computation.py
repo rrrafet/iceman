@@ -98,7 +98,7 @@ class RiskComputation:
                 root_component = self.portfolio_graph.components[root_component_id]
                 
                 # Execute visitor traversal
-                self.portfolio_graph.accept_visitor(self._visitor, root_component_id)
+                root_component.accept(self._visitor)
                 
                 # Update computation state
                 self._computation_timestamp = datetime.now()
