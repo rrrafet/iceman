@@ -97,6 +97,19 @@ class DataAccessService:
             logger.error(f"Error computing active returns for {component_id}: {e}")
             return pd.Series(dtype=float, name=f"{component_id}_active")
     
+    def get_all_component_ids(self) -> List[str]:
+        """
+        Get all available component IDs from the portfolio.
+        
+        Returns:
+            List of component IDs
+        """
+        try:
+            return self.portfolio_provider.get_all_component_ids()
+        except Exception as e:
+            logger.error(f"Error getting component IDs: {e}")
+            return []
+    
     def get_cumulative_returns(self, component_id: str, return_type: str) -> pd.Series:
         """
         Get cumulative returns for a component.

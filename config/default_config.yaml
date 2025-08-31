@@ -10,7 +10,7 @@ portfolio:
 analysis:
   annualized: true
   frequency: "daily"
-  currency: "USD"
+  currency: "SEK"
   risk_model_type: "factor_based"
 
 ui_defaults:

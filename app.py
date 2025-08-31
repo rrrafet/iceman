@@ -95,7 +95,7 @@ def run():
     sidebar_state = render_sidebar(config_service, data_access_service)
     
     # Main header
-    st.title("Maverick - Portfolio Risk Analysis")
+    st.title("Maverick")
     
     # Enhanced header with portfolio and risk analysis status
     col1, col2, col3 = st.columns([2, 2, 1])

@@ -49,9 +49,8 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         st.subheader("Component")
         
         # Get all available components
-        try:
-            available_components = list(data_access_service.risk_analysis_service._portfolio_graph.components.keys())
-        except:
+        available_components = data_access_service.get_all_component_ids()
+        if not available_components:
             available_components = [config_service.get_root_component_id()]
         
         # Default to root component
