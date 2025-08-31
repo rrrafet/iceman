@@ -290,6 +290,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         
         # Simplified storage structure
         self._leaf_models: Dict[str, Dict[str, Any]] = {}  # leaf_id -> {'portfolio': model, 'benchmark': model, 'active': model}
+        self._node_models: Dict[str, Dict[str, Any]] = {}  # node_id -> {'portfolio': model, 'benchmark': model, 'active': model}
         self._node_risk_results: Dict[str, Dict[str, Any]] = {}  # node_id -> {'portfolio': RiskResult, 'benchmark': RiskResult, 'active': RiskResult}
         
         # Keep weight aggregator for hierarchical weight calculations (this is working well)
@@ -389,11 +390,34 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                     'benchmark': benchmark_result,
                     'active': active_result
                 }
-                
+
                 self.logger.info(f"Calculated risks for {leaf.component_id}: "
                                f"portfolio={portfolio_result.total_risk:.4f}, "
                                f"benchmark={benchmark_result.total_risk:.4f}, "
                                f"active={active_result.total_risk:.4f}")
+                
+                # Store RiskResult objects in metric store with correct naming convention
+                if self.metric_store:
+                    self.metric_store.set_metric(
+                        leaf.component_id,
+                        'risk_result_portfolio',
+                        ObjectMetric(portfolio_result)
+                    )
+                    self.metric_store.set_metric(
+                        leaf.component_id,
+                        'risk_result_benchmark',
+                        ObjectMetric(benchmark_result)
+                    )
+                    self.metric_store.set_metric(
+                        leaf.component_id,
+                        'risk_result_active',
+                        ObjectMetric(active_result)
+                    )
+                    
+                    # Validate storage consistency between instance vars and metric store
+                    validation_result = self.validate_storage_consistency(leaf.component_id)
+                    if not validation_result['consistent']:
+                        self.logger.warning(f"Storage inconsistency detected for leaf {leaf.component_id}")
                 
             except Exception as e:
                 self.logger.warning(f"Failed to calculate simplified risk analysis for {leaf.component_id}: {e}")
@@ -560,7 +584,10 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                     'benchmark': benchmark_result,
                     'active': active_result
                 }
-                
+
+                # Store models
+                self._node_models[node.component_id] = node_models
+
                 self.logger.info(f"Calculated risks for node {node.component_id}: "
                                f"portfolio={portfolio_result.total_risk:.4f}, "
                                f"benchmark={benchmark_result.total_risk:.4f}, "
@@ -570,19 +597,24 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                 if self.metric_store:
                     self.metric_store.set_metric(
                         node.component_id,
-                        'portfolio_risk_result',
+                        'risk_result_portfolio',
                         ObjectMetric(portfolio_result)
                     )
                     self.metric_store.set_metric(
                         node.component_id,
-                        'benchmark_risk_result', 
+                        'risk_result_benchmark', 
                         ObjectMetric(benchmark_result)
                     )
                     self.metric_store.set_metric(
                         node.component_id,
-                        'active_risk_result',
+                        'risk_result_active',
                         ObjectMetric(active_result)
                     )
+                    
+                    # Validate storage consistency between instance vars and metric store
+                    validation_result = self.validate_storage_consistency(node.component_id)
+                    if not validation_result['consistent']:
+                        self.logger.warning(f"Storage inconsistency detected for {node.component_id}")
                 
             except Exception as e:
                 self.logger.error(f"Failed to calculate risk for node {node.component_id}: {e}")
@@ -1418,6 +1450,88 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
             'validation_timestamp': pd.Timestamp.now().isoformat(),
             'status': 'visitor_validation_basic'
         }
+    
+    def validate_storage_consistency(self, component_id: str) -> Dict[str, Any]:
+        """
+        Validate that risk results are consistent between instance variables and metric store.
+        
+        This ensures the dual storage approach doesn't result in inconsistent data.
+        
+        Parameters
+        ----------
+        component_id : str
+            Component ID to validate storage consistency for
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Validation results with consistency status and any discrepancies
+        """
+        validation_result = {
+            'component_id': component_id,
+            'consistent': True,
+            'errors': [],
+            'warnings': []
+        }
+        
+        try:
+            # Get results from instance variables
+            instance_results = self._node_risk_results.get(component_id, {})
+            
+            # Get results from metric store
+            metric_store_results = {}
+            if self.metric_store:
+                for lens in ['portfolio', 'benchmark', 'active']:
+                    metric_key = f'risk_result_{lens}'
+                    metric = self.metric_store.get_metric(component_id, metric_key)
+                    if metric:
+                        metric_store_results[lens] = metric.value()
+            
+            # Compare the two sources
+            for lens in ['portfolio', 'benchmark', 'active']:
+                instance_result = instance_results.get(lens)
+                metric_result = metric_store_results.get(lens)
+                
+                if instance_result is None and metric_result is None:
+                    continue  # Both missing - consistent
+                    
+                if instance_result is None and metric_result is not None:
+                    validation_result['errors'].append(
+                        f"{lens}: Missing from instance variables but present in metric store"
+                    )
+                    validation_result['consistent'] = False
+                    
+                elif instance_result is not None and metric_result is None:
+                    validation_result['errors'].append(
+                        f"{lens}: Present in instance variables but missing from metric store"
+                    )
+                    validation_result['consistent'] = False
+                    
+                elif instance_result is not None and metric_result is not None:
+                    # Both present - check if they're the same object or have same total risk
+                    if hasattr(instance_result, 'total_risk') and hasattr(metric_result, 'total_risk'):
+                        if abs(instance_result.total_risk - metric_result.total_risk) > 1e-9:
+                            validation_result['warnings'].append(
+                                f"{lens}: Total risk differs between storage locations "
+                                f"(instance: {instance_result.total_risk:.6f}, "
+                                f"metric_store: {metric_result.total_risk:.6f})"
+                            )
+            
+            # Log validation results
+            if validation_result['consistent']:
+                self.logger.debug(f"Storage consistency validated for {component_id}")
+            else:
+                self.logger.warning(
+                    f"Storage inconsistency detected for {component_id}: "
+                    f"{len(validation_result['errors'])} errors, {len(validation_result['warnings'])} warnings"
+                )
+                
+        except Exception as e:
+            validation_result['consistent'] = False
+            validation_result['errors'].append(f"Validation error: {str(e)}")
+            self.logger.error(f"Failed to validate storage consistency for {component_id}: {e}")
+        
+        return validation_result
     
     def to_unified_schema(self, component_id: str) -> 'RiskResultSchema':
         """
