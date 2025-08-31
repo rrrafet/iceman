@@ -104,6 +104,10 @@ class RiskAnnualizer:
         # Keys that represent volatilities/risks (scalars)
         volatility_keys = {
             'portfolio_volatility',
+            'factor_risk',
+            'total_risk',
+            'active_risk',
+            'specific_risk',
             'total_active_risk',
             'allocation_factor_risk',
             'allocation_specific_risk', 
