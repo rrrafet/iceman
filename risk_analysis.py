@@ -107,6 +107,9 @@ class RiskResult:
     
     # Metadata
     annualized: bool = False
+    
+    # Asset name mapping for visualization (component_id -> display_name)
+    asset_name_mapping: Optional[Dict[str, str]] = None
     frequency: Optional[str] = None
     analysis_type: str = "portfolio"
     asset_names: List[str] = field(default_factory=list)
@@ -184,6 +187,7 @@ def analyze_portfolio_risk(
     weights: Union[np.ndarray, Dict[str, float]],
     asset_names: Optional[List[str]] = None,
     factor_names: Optional[List[str]] = None,
+    asset_display_names: Optional[List[str]] = None,
     annualize: bool = True
 ) -> RiskResult:
     """
@@ -199,9 +203,11 @@ def analyze_portfolio_risk(
     weights : np.ndarray or Dict[str, float]
         Portfolio weights (must sum to ~1.0)
     asset_names : List[str], optional
-        Asset names for labeling results
+        Asset names for labeling results (component IDs)
     factor_names : List[str], optional
         Factor names for labeling results
+    asset_display_names : List[str], optional
+        Display names for assets (for visualization)
     annualize : bool, default True
         Whether to annualize results based on model frequency
         
@@ -260,6 +266,11 @@ def analyze_portfolio_risk(
         model.resvar, weights_array, portfolio_volatility
     )
     
+    # Create asset name mapping for visualization
+    asset_name_mapping = None
+    if asset_names and asset_display_names and len(asset_names) == len(asset_display_names):
+        asset_name_mapping = dict(zip(asset_names, asset_display_names))
+    
     # Validation
     validation = RiskCalculator.validate_risk_decomposition(
         portfolio_volatility,
@@ -314,6 +325,7 @@ def analyze_portfolio_risk(
             portfolio_weights=dict(zip(asset_names, weights_array)),
             asset_names=asset_names,
             factor_names=factor_names,
+            asset_name_mapping=asset_name_mapping,
             annualized=True,
             frequency=model.frequency,
             validation_passed=validation['passes'],
@@ -352,6 +364,7 @@ def analyze_portfolio_risk(
             portfolio_weights=dict(zip(asset_names, weights_array)),
             asset_names=asset_names,
             factor_names=factor_names,
+            asset_name_mapping=asset_name_mapping,
             annualized=False,
             frequency=getattr(model, 'frequency', None),
             validation_passed=validation['passes'],
@@ -369,6 +382,7 @@ def analyze_active_risk(
     factor_names: Optional[List[str]] = None,
     active_model: Optional[RiskModel] = None,
     cross_covar: Optional[np.ndarray] = None,
+    asset_display_names: Optional[List[str]] = None,
     annualize: bool = True
 ) -> RiskResult:
     """
@@ -569,6 +583,25 @@ def analyze_active_risk(
         asset_cross_correlation = np.zeros_like(active_weights_array)
         asset_contributions = np.zeros_like(active_weights_array)
     
+    # Create asset name mapping for visualization
+    asset_name_mapping = None
+    if asset_names and asset_display_names and len(asset_names) == len(asset_display_names):
+        asset_name_mapping = dict(zip(asset_names, asset_display_names))
+    
+    # Create matrix data for visualization (using active weights)
+    weighted_betas = _create_weighted_betas_dict(
+        RiskCalculator.calculate_weighted_betas(portfolio_model.beta, active_weights_array),
+        asset_names, factor_names
+    )
+    
+    # Create asset by factor contributions matrix (for active risk)
+    asset_by_factor_matrix = RiskCalculator.calculate_asset_by_factor_contributions(
+        portfolio_model.beta, portfolio_model.factor_covar, active_weights_array, total_active_risk
+    )
+    asset_by_factor_contributions = _create_asset_by_factor_dict(
+        asset_by_factor_matrix, asset_names, factor_names
+    )
+    
     # Validation
     validation = RiskCalculator.validate_active_risk_euler_identity(
         total_active_risk,
@@ -641,9 +674,14 @@ def analyze_active_risk(
             factor_selection_contributions=dict(zip(factor_names, annualized_factor_selection)),
             factor_cross_correlation=dict(zip(factor_names, annualized_factor_cross)),
             
+            # Matrix data for heatmaps
+            weighted_betas=weighted_betas,
+            asset_by_factor_contributions=asset_by_factor_contributions,
+            
             # Metadata
             asset_names=asset_names,
             factor_names=factor_names,
+            asset_name_mapping=asset_name_mapping,
             analysis_type="active",
             annualized=True,
             frequency=frequency,
@@ -687,9 +725,14 @@ def analyze_active_risk(
             factor_selection_contributions=dict(zip(factor_names, factor_selection_contributions)),
             factor_cross_correlation=dict(zip(factor_names, factor_cross_contributions)),
             
+            # Matrix data for heatmaps
+            weighted_betas=weighted_betas,
+            asset_by_factor_contributions=asset_by_factor_contributions,
+            
             # Metadata
             asset_names=asset_names,
             factor_names=factor_names,
+            asset_name_mapping=asset_name_mapping,
             analysis_type="active",
             annualized=False,
             frequency=frequency,
