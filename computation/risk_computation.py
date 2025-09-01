@@ -340,9 +340,9 @@ class RiskComputation:
             # Validate each lens
             for lens, risk_result in risk_results.items():
                 if risk_result:
-                    # Check Euler identity: total_risk² ≈ factor_risk² + specific_risk²
+                    # Check Euler identity: total_risk² ≈ factor_volatility² + specific_volatility²
                     total_risk_sq = risk_result.total_risk ** 2
-                    factor_specific_sum = risk_result.factor_risk ** 2 + risk_result.specific_risk ** 2
+                    factor_specific_sum = risk_result.factor_volatility ** 2 + risk_result.specific_volatility ** 2
                     
                     relative_error = abs(total_risk_sq - factor_specific_sum) / total_risk_sq if total_risk_sq > 0 else 0
                     
@@ -355,7 +355,7 @@ class RiskComputation:
                     if risk_result.total_risk < 0:
                         validation_result["errors"].append(f"{lens}: Negative total risk")
                     
-                    if risk_result.factor_risk < 0 or risk_result.specific_risk < 0:
+                    if risk_result.factor_volatility < 0 or risk_result.specific_volatility < 0:
                         validation_result["errors"].append(f"{lens}: Negative component risks")
             
             validation_result["valid"] = len(validation_result["errors"]) == 0

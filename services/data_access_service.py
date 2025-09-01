@@ -292,14 +292,15 @@ class DataAccessService:
         try:
             risk_data = self.risk_analysis_service.get_risk_results(component_id, lens)
             return {
-                "factor_risk": risk_data.get("factor_risk", 0.0),
-                "specific_risk": risk_data.get("specific_risk", 0.0),
+                "factor_risk_contribution": risk_data.get("factor_risk_contribution", 0.0),
+                "specific_risk_contribution": risk_data.get("specific_risk_contribution", 0.0),
+                "cross_correlation_risk_contribution": risk_data.get("cross_correlation_risk_contribution", 0.0),
                 "total_risk": risk_data.get("total_risk", 0.0)
             }
         except Exception as e:
             logger.error(f"Error getting risk decomposition for {component_id}/{lens}: {e}")
-            return {"factor_risk": 0.0, "specific_risk": 0.0, "total_risk": 0.0}
-    
+            return {"factor_risk_contribution": 0.0, "specific_risk_contribution": 0.0, "cross_correlation_risk_contribution": 0.0, "total_risk": 0.0}
+
     def get_factor_exposure(self, component_id: str, lens: str) -> List[Tuple[str, float]]:
         """
         Get factor exposures for a component and lens.

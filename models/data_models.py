@@ -62,12 +62,12 @@ class RiskSummary:
     def __post_init__(self):
         """Calculate derived fields after initialization."""
         if self.total_risk > 0:
-            self.factor_risk_pct = (self.factor_risk ** 2) / (self.total_risk ** 2) * 100
-            self.specific_risk_pct = (self.specific_risk ** 2) / (self.total_risk ** 2) * 100
+            self.factor_risk_pct = (self.factor_volatility ** 2) / (self.total_risk ** 2) * 100
+            self.specific_risk_pct = (self.specific_volatility ** 2) / (self.total_risk ** 2) * 100
         
         # Calculate Euler identity check
         if self.total_risk > 0:
-            expected_total_risk_sq = self.factor_risk ** 2 + self.specific_risk ** 2
+            expected_total_risk_sq = self.factor_volatility ** 2 + self.specific_volatility ** 2
             actual_total_risk_sq = self.total_risk ** 2
             self.euler_identity_check = abs(actual_total_risk_sq - expected_total_risk_sq) / actual_total_risk_sq
             self.is_valid = self.euler_identity_check < 0.01  # 1% tolerance
@@ -174,8 +174,10 @@ class AnalysisResult:
         for lens, risk_summary in self.risk_summaries.items():
             summary["risk_summaries"][lens] = {
                 "total_risk": risk_summary.total_risk,
-                "factor_risk": risk_summary.factor_risk,
-                "specific_risk": risk_summary.specific_risk,
+                "factor_risk_contribution": risk_summary.factor_risk_contribution,
+                "specific_risk_contribution": risk_summary.specific_risk_contribution,
+                "factor_volatility": risk_summary.factor_volatility,
+                "specific_volatility": risk_summary.specific_volatility,
                 "factor_risk_pct": risk_summary.factor_risk_pct,
                 "specific_risk_pct": risk_summary.specific_risk_pct,
                 "is_valid": risk_summary.is_valid,

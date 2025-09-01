@@ -248,87 +248,105 @@ class PortfolioDataProvider:
     
     def get_component_returns(self, component_id: str, return_type: str) -> pd.Series:
         """
-        Get return time series for a component.
+        Get return time series for a component using PortfolioGraph methods.
         
         Args:
             component_id: Component identifier
-            return_type: Type of returns ('portfolio' or 'benchmark')
+            return_type: Type of returns ('portfolio', 'benchmark', or 'active')
             
         Returns:
             Series with dates as index and returns as values
         """
-        if self._data is None:
-            raise RuntimeError("Portfolio data not loaded")
+        if self._portfolio_graph is None:
+            raise RuntimeError("PortfolioGraph not built")
         
-        # Map return type to column name
-        return_column_map = {
-            'portfolio': 'portfolio_return',
-            'benchmark': 'benchmark_return'
-        }
+        if return_type not in ['portfolio', 'benchmark', 'active']:
+            raise ValueError(f"Invalid return_type: {return_type}. Must be 'portfolio', 'benchmark', or 'active'")
         
-        if return_type not in return_column_map:
-            raise ValueError(f"Invalid return_type: {return_type}. Must be 'portfolio' or 'benchmark'")
-        
-        return_column = return_column_map[return_type]
-        
-        if return_column not in self._data.columns:
-            logger.warning(f"Column {return_column} not found in data")
+        try:
+            # Use PortfolioGraph methods for return calculation
+            if return_type == 'portfolio':
+                metric = self._portfolio_graph.portfolio_returns(component_id)
+            elif return_type == 'benchmark':
+                metric = self._portfolio_graph.benchmark_returns(component_id)
+            elif return_type == 'active':
+                metric = self._portfolio_graph.excess_returns(component_id)
+            
+            if metric is None:
+                logger.warning(f"No {return_type} returns found for component: {component_id}")
+                return pd.Series(dtype=float, name=f"{component_id}_{return_type}")
+            
+            # Convert metric to pandas Series
+            metric_value = metric.value()
+            
+            if isinstance(metric_value, pd.Series):
+                result_series = metric_value.copy()
+                result_series.name = f"{component_id}_{return_type}"
+                logger.debug(f"Created {return_type} returns series for {component_id}: {len(result_series)} observations")
+                return result_series
+            elif isinstance(metric_value, (int, float)):
+                # Scalar metric - create single-value series
+                result_series = pd.Series([metric_value], name=f"{component_id}_{return_type}")
+                logger.debug(f"Created {return_type} returns scalar for {component_id}: {metric_value}")
+                return result_series
+            else:
+                logger.warning(f"Unexpected metric type for {component_id}: {type(metric_value)}")
+                return pd.Series(dtype=float, name=f"{component_id}_{return_type}")
+                
+        except Exception as e:
+            logger.error(f"Failed to get {return_type} returns for component {component_id}: {e}")
             return pd.Series(dtype=float, name=f"{component_id}_{return_type}")
-        
-        component_data = self._data[self._data['component_id'] == component_id].copy()
-        
-        if component_data.empty:
-            logger.warning(f"No data found for component: {component_id}")
-            return pd.Series(dtype=float, name=f"{component_id}_{return_type}")
-        
-        # Create time series
-        series = component_data.set_index('date')[return_column].sort_index()
-        series.name = f"{component_id}_{return_type}"
-        
-        logger.debug(f"Created {return_type} returns series for {component_id}: {len(series)} observations")
-        return series
     
     def get_component_weights(self, component_id: str, weight_type: str) -> pd.Series:
         """
-        Get weight time series for a component.
+        Get weight values for a component using PortfolioGraph methods.
         
         Args:
             component_id: Component identifier
-            weight_type: Type of weights ('portfolio' or 'benchmark')
+            weight_type: Type of weights ('portfolio', 'benchmark', or 'active')
             
         Returns:
-            Series with dates as index and weights as values
+            Series with component weight values (converted from Dict for backward compatibility)
         """
-        if self._data is None:
-            raise RuntimeError("Portfolio data not loaded")
+        if self._portfolio_graph is None:
+            raise RuntimeError("PortfolioGraph not built")
         
-        # Map weight type to column name
-        weight_column_map = {
-            'portfolio': 'portfolio_weight',
-            'benchmark': 'benchmark_weight'
-        }
+        if weight_type not in ['portfolio', 'benchmark', 'active']:
+            raise ValueError(f"Invalid weight_type: {weight_type}. Must be 'portfolio', 'benchmark', or 'active'")
         
-        if weight_type not in weight_column_map:
-            raise ValueError(f"Invalid weight_type: {weight_type}. Must be 'portfolio' or 'benchmark'")
-        
-        weight_column = weight_column_map[weight_type]
-        
-        if weight_column not in self._data.columns:
-            logger.warning(f"Column {weight_column} not found in data")
+        try:
+            # Use PortfolioGraph methods for weight calculation
+            if weight_type == 'portfolio':
+                weights_dict = self._portfolio_graph.portfolio_weights(component_id)
+            elif weight_type == 'benchmark':
+                weights_dict = self._portfolio_graph.benchmark_weights(component_id)
+            elif weight_type == 'active':
+                # Get both portfolio and benchmark weights, then calculate active
+                portfolio_weights = self._portfolio_graph.portfolio_weights(component_id)
+                benchmark_weights = self._portfolio_graph.benchmark_weights(component_id)
+                
+                # Calculate active weights (portfolio - benchmark)
+                weights_dict = {}
+                all_components = set(portfolio_weights.keys()) | set(benchmark_weights.keys())
+                for comp_id in all_components:
+                    port_weight = portfolio_weights.get(comp_id, 0.0)
+                    bench_weight = benchmark_weights.get(comp_id, 0.0)
+                    weights_dict[comp_id] = port_weight - bench_weight
+            
+            if not weights_dict:
+                logger.warning(f"No {weight_type} weights found for component: {component_id}")
+                return pd.Series(dtype=float, name=f"{component_id}_{weight_type}_weight")
+            
+            # Convert dict to Series for backward compatibility
+            result_series = pd.Series(weights_dict, name=f"{component_id}_{weight_type}_weight")
+            result_series = result_series.sort_index()  # Sort by component IDs
+            
+            logger.debug(f"Created {weight_type} weights series for {component_id}: {len(result_series)} components")
+            return result_series
+                
+        except Exception as e:
+            logger.error(f"Failed to get {weight_type} weights for component {component_id}: {e}")
             return pd.Series(dtype=float, name=f"{component_id}_{weight_type}_weight")
-        
-        component_data = self._data[self._data['component_id'] == component_id].copy()
-        
-        if component_data.empty:
-            logger.warning(f"No data found for component: {component_id}")
-            return pd.Series(dtype=float, name=f"{component_id}_{weight_type}_weight")
-        
-        # Create time series
-        series = component_data.set_index('date')[weight_column].sort_index()
-        series.name = f"{component_id}_{weight_type}_weight"
-        
-        logger.debug(f"Created {weight_type} weights series for {component_id}: {len(series)} observations")
-        return series
     
     def get_all_component_ids(self) -> List[str]:
         """
@@ -356,8 +374,8 @@ class PortfolioDataProvider:
         
         leaf_components = []
         for comp_id, component in self._portfolio_graph.components.items():
-            # Check if component has no children in adjacency list
-            if comp_id not in self._portfolio_graph.adjacency_list or not self._portfolio_graph.adjacency_list[comp_id]:
+            # Use component's is_leaf() method to check if it's a leaf
+            if component.is_leaf():
                 leaf_components.append(comp_id)
         
         leaf_components = sorted(leaf_components)
@@ -375,8 +393,9 @@ class PortfolioDataProvider:
             raise RuntimeError("PortfolioGraph not built")
         
         node_components = []
-        for comp_id in self._portfolio_graph.adjacency_list:
-            if self._portfolio_graph.adjacency_list[comp_id]:
+        for comp_id, component in self._portfolio_graph.components.items():
+            # Use component's is_leaf() method - nodes are non-leaf components
+            if not component.is_leaf():
                 node_components.append(comp_id)
         
         node_components = sorted(node_components)
@@ -397,82 +416,133 @@ class PortfolioDataProvider:
     
     def get_returns_matrix(self, return_type: str) -> pd.DataFrame:
         """
-        Get returns matrix with all components as columns.
+        Get returns matrix with all components as columns using PortfolioGraph methods.
         
         Args:
-            return_type: Type of returns ('portfolio' or 'benchmark')
+            return_type: Type of returns ('portfolio', 'benchmark', or 'active')
             
         Returns:
             DataFrame with dates as index and components as columns
         """
-        if self._data is None:
-            raise RuntimeError("Portfolio data not loaded")
+        if self._portfolio_graph is None:
+            raise RuntimeError("PortfolioGraph not built")
         
-        return_column_map = {
-            'portfolio': 'portfolio_return',
-            'benchmark': 'benchmark_return'
-        }
+        if return_type not in ['portfolio', 'benchmark', 'active']:
+            raise ValueError(f"Invalid return_type: {return_type}. Must be 'portfolio', 'benchmark', or 'active'")
         
-        if return_type not in return_column_map:
-            raise ValueError(f"Invalid return_type: {return_type}. Must be 'portfolio' or 'benchmark'")
-        
-        return_column = return_column_map[return_type]
-        
-        if return_column not in self._data.columns:
-            logger.warning(f"Column {return_column} not found in data")
+        try:
+            # Use collect_metrics to gather returns from all leaf components
+            if return_type == 'active':
+                metric_name = 'excess_return'  # Use appropriate metric name for active returns
+            else:
+                metric_name = f'{return_type}_return'
+            
+            # Get root component ID (assuming single root or first available)
+            root_id = self._portfolio_graph.root_id
+            if root_id is None:
+                # Fallback: get first available component as root
+                root_candidates = [comp_id for comp_id, comp in self._portfolio_graph.components.items() 
+                                 if not comp.parent_ids]
+                root_id = root_candidates[0] if root_candidates else list(self._portfolio_graph.components.keys())[0]
+            
+            # Collect metrics from all leaf components
+            metrics_dict = self._portfolio_graph.collect_metrics(root_id, metric_name, include_nodes=False)
+            
+            if not metrics_dict:
+                logger.warning(f"No {return_type} returns found in portfolio graph")
+                return pd.DataFrame()
+            
+            # Convert collected metrics to DataFrame
+            # Handle both scalar and series metrics
+            series_data = {}
+            for comp_id, metric_value in metrics_dict.items():
+                if isinstance(metric_value, pd.Series):
+                    series_data[comp_id] = metric_value
+                elif isinstance(metric_value, (int, float)):
+                    # Create single-value series for scalar metrics
+                    series_data[comp_id] = pd.Series([metric_value])
+            
+            if not series_data:
+                logger.warning(f"No valid time series data found for {return_type} returns")
+                return pd.DataFrame()
+            
+            # Create DataFrame from series data
+            returns_matrix = pd.DataFrame(series_data)
+            
+            # Fill NaN values with 0 for consistency
+            returns_matrix = returns_matrix.fillna(0.0)
+            
+            # Sort columns for consistent output
+            returns_matrix = returns_matrix.reindex(sorted(returns_matrix.columns), axis=1)
+            
+            logger.debug(f"Created {return_type} returns matrix using PortfolioGraph: {returns_matrix.shape[0]} dates, "
+                        f"{returns_matrix.shape[1]} components")
+            return returns_matrix
+            
+        except Exception as e:
+            logger.error(f"Failed to create {return_type} returns matrix: {e}")
             return pd.DataFrame()
-        
-        # Pivot to create returns matrix
-        returns_matrix = self._data.pivot_table(
-            index='date',
-            columns='component_id',
-            values=return_column,
-            aggfunc='first'
-        )
-        
-        # Fill NaN values with 0
-        returns_matrix = returns_matrix.fillna(0.0)
-        
-        logger.debug(f"Created {return_type} returns matrix: {returns_matrix.shape[0]} dates, "
-                    f"{returns_matrix.shape[1]} components")
-        return returns_matrix
     
-    def get_weights_snapshot(self, date: datetime) -> pd.DataFrame:
+    def get_weights_snapshot(self, date: datetime = None) -> pd.DataFrame:
         """
-        Get cross-section of weights at a specific date.
+        Get cross-section of weights using PortfolioGraph methods.
         
         Args:
-            date: Date for the snapshot
+            date: Date for the snapshot (currently ignored as PortfolioGraph manages time-based logic)
             
         Returns:
-            DataFrame with components and their weights at the specified date
+            DataFrame with components and their current weights
         """
-        if self._data is None:
-            raise RuntimeError("Portfolio data not loaded")
+        if self._portfolio_graph is None:
+            raise RuntimeError("PortfolioGraph not built")
         
-        # Find data for the closest available date
-        available_dates = self._data['date'].unique()
-        closest_date = min(available_dates, key=lambda x: abs((x - pd.Timestamp(date)).days))
-        
-        snapshot_data = self._data[self._data['date'] == closest_date].copy()
-        
-        if snapshot_data.empty:
-            logger.warning(f"No data found for date: {date}")
+        try:
+            # Get root component ID
+            root_id = self._portfolio_graph.root_id
+            if root_id is None:
+                # Fallback: get first available component as root
+                root_candidates = [comp_id for comp_id, comp in self._portfolio_graph.components.items() 
+                                 if not comp.parent_ids]
+                root_id = root_candidates[0] if root_candidates else list(self._portfolio_graph.components.keys())[0]
+            
+            # Get portfolio and benchmark weights using PortfolioGraph methods
+            portfolio_weights = self._portfolio_graph.portfolio_weights(root_id)
+            benchmark_weights = self._portfolio_graph.benchmark_weights(root_id)
+            
+            # Combine all components from both weight dictionaries
+            all_components = set(portfolio_weights.keys()) | set(benchmark_weights.keys())
+            
+            if not all_components:
+                logger.warning("No weight data found in portfolio graph")
+                return pd.DataFrame()
+            
+            # Create snapshot data
+            snapshot_data = []
+            for component_id in sorted(all_components):
+                row = {
+                    'component_id': component_id,
+                    'portfolio_weight': portfolio_weights.get(component_id, 0.0),
+                    'benchmark_weight': benchmark_weights.get(component_id, 0.0)
+                }
+                # Calculate active weight
+                row['active_weight'] = row['portfolio_weight'] - row['benchmark_weight']
+                snapshot_data.append(row)
+            
+            # Create DataFrame
+            snapshot = pd.DataFrame(snapshot_data)
+            
+            # Add date information if provided
+            if date is not None:
+                snapshot['date'] = pd.Timestamp(date)
+                logger.debug(f"Created weights snapshot for requested date {date}: {len(snapshot)} components")
+            else:
+                logger.debug(f"Created current weights snapshot: {len(snapshot)} components")
+            
+            return snapshot
+            
+        except Exception as e:
+            logger.error(f"Failed to create weights snapshot: {e}")
             return pd.DataFrame()
-        
-        # Select relevant columns
-        weight_columns = ['component_id']
-        if 'portfolio_weight' in self._data.columns:
-            weight_columns.append('portfolio_weight')
-        if 'benchmark_weight' in self._data.columns:
-            weight_columns.append('benchmark_weight')
-        
-        snapshot = snapshot_data[weight_columns].copy()
-        snapshot['date'] = closest_date
-        
-        logger.debug(f"Created weights snapshot for {date} (using {closest_date}): "
-                    f"{len(snapshot)} components")
-        return snapshot
     
     def get_component_children(self, parent_id: str) -> List[str]:
         """

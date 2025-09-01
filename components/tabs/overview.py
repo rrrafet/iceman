@@ -74,24 +74,24 @@ def render_risk_composition(data_access_service, sidebar_state):
     with col1:
         st.markdown("**Portfolio**")
         total = portfolio_risk.get('total_risk', 0)
-        factor = portfolio_risk.get('factor_risk', 0)
-        specific = portfolio_risk.get('specific_risk', 0)
+        factor = portfolio_risk.get('factor_risk_contribution', 0)
+        specific = portfolio_risk.get('specific_risk_contribution', 0)
         st.metric("Total", f"{total:.1%}")
         st.caption(f"Factor: {factor:.1%} | Specific: {specific:.1%}")
     
     with col2:
         st.markdown("**Benchmark**")
         total = benchmark_risk.get('total_risk', 0)
-        factor = benchmark_risk.get('factor_risk', 0)
-        specific = benchmark_risk.get('specific_risk', 0)
+        factor = benchmark_risk.get('factor_risk_contribution', 0)
+        specific = benchmark_risk.get('specific_risk_contribution', 0)
         st.metric("Total", f"{total:.1%}")
         st.caption(f"Factor: {factor:.1%} | Specific: {specific:.1%}")
     
     with col3:
         st.markdown("**Active**")
         total = active_risk.get('total_risk', 0)
-        factor = active_risk.get('factor_risk', 0)
-        specific = active_risk.get('specific_risk', 0)
+        factor = active_risk.get('factor_risk_contribution', 0)
+        specific = active_risk.get('specific_risk_contribution', 0)
         st.metric("Total", f"{total:.1%}")
         st.caption(f"Factor: {factor:.1%} | Specific: {specific:.1%}")
 
