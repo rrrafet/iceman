@@ -160,12 +160,12 @@ class LegacyRiskDecomposer:
     @property
     def factor_risk_contribution(self) -> float:
         """Factor risk component."""
-        return self._result.factor_risk
+        return self._result.factor_risk_contribution
     
     @property
     def specific_risk_contribution(self) -> float:
         """Specific risk component."""
-        return self._result.specific_risk
+        return self._result.specific_risk_contribution
     
     @property
     def total_risk(self) -> float:
@@ -227,8 +227,8 @@ class LegacyRiskDecomposer:
         """
         summary = {
             'portfolio_volatility': self._result.total_risk,
-            'factor_risk_contribution': self._result.factor_risk,
-            'specific_risk_contribution': self._result.specific_risk,
+            'factor_risk_contribution': self._result.factor_risk_contribution,
+            'specific_risk_contribution': self._result.specific_risk_contribution,
             'factor_risk_percentage': self._result.factor_risk_pct,
             'specific_risk_percentage': self._result.specific_risk_pct,
             'analysis_type': self._result.analysis_type,
@@ -243,7 +243,8 @@ class LegacyRiskDecomposer:
                 'allocation_specific_risk': self._result.allocation_specific_risk,
                 'selection_factor_risk': self._result.selection_factor_risk,
                 'selection_specific_risk': self._result.selection_specific_risk,
-                'cross_correlation_risk': self._result.cross_correlation_risk
+                'cross_correlation_risk_contribution': self._result.cross_correlation_risk_contribution,
+                'cross_correlation_volatility': self._result.cross_correlation_volatility
             })
         
         return summary
@@ -295,8 +296,8 @@ class LegacyRiskResultSchema:
         """Get core metrics for a lens (legacy interface)."""
         return {
             'total_risk': self._result.total_risk,
-            'factor_risk_contribution': self._result.factor_risk, 
-            'specific_risk_contribution': self._result.specific_risk
+            'factor_risk_contribution': self._result.factor_risk_contribution, 
+            'specific_risk_contribution': self._result.specific_risk_contribution
         }
     
     def get_lens_factor_contributions(self, lens: str) -> Dict[str, float]:
@@ -329,11 +330,11 @@ class LegacyRiskResultSchema:
     
     @property
     def factor_risk(self) -> float:
-        return self._result.factor_risk
+        return self._result.factor_risk_contribution
     
     @property
     def specific_risk(self) -> float:
-        return self._result.specific_risk
+        return self._result.specific_risk_contribution
 
 
 def create_single_model_context(

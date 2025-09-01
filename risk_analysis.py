@@ -60,9 +60,12 @@ class RiskResult:
     
     # Core risk metrics  
     total_risk: float
-    factor_risk: float
-    specific_risk: float
-    
+    factor_risk_contribution: float  # Summable Euler contribution
+    specific_risk_contribution: float  # Summable Euler contribution
+    factor_volatility: float  # Standalone factor risk volatility
+    specific_volatility: float  # Standalone specific risk volatility
+    cross_correlation_volatility: float  # Standalone cross-correlation risk volatility
+
     # Attribution data
     factor_contributions: Dict[str, float] = field(default_factory=dict)
     asset_contributions: Dict[str, float] = field(default_factory=dict)
@@ -87,7 +90,8 @@ class RiskResult:
     allocation_specific_risk: Optional[float] = None  
     selection_factor_risk: Optional[float] = None
     selection_specific_risk: Optional[float] = None
-    cross_correlation_risk: Optional[float] = None
+    cross_correlation_risk_contribution: Optional[float] = 0.0
+    cross_correlation_volatility: Optional[float] = 0.0
     
     # Active risk asset-level breakdowns
     asset_allocation_factor: Optional[Dict[str, float]] = None
@@ -115,13 +119,13 @@ class RiskResult:
     
     @property
     def factor_risk_pct(self) -> float:
-        """Factor risk as percentage of total risk."""
-        return self.factor_risk / self.total_risk if self.total_risk > 0 else 0.0
+        """Factor risk contribution as percentage of total risk."""
+        return self.factor_risk_contribution / self.total_risk if self.total_risk > 0 else 0.0
     
     @property
     def specific_risk_pct(self) -> float:
-        """Specific risk as percentage of total risk."""
-        return self.specific_risk / self.total_risk if self.total_risk > 0 else 0.0
+        """Specific risk contribution as percentage of total risk."""
+        return self.specific_risk_contribution / self.total_risk if self.total_risk > 0 else 0.0
     
     @property
     def total_risk_bps(self) -> float:
@@ -130,13 +134,13 @@ class RiskResult:
     
     @property
     def factor_risk_bps(self) -> float:
-        """Factor risk in basis points."""
-        return self.factor_risk * 10000
+        """Factor risk contribution in basis points."""
+        return self.factor_risk_contribution * 10000
     
     @property
     def specific_risk_bps(self) -> float:
-        """Specific risk in basis points."""
-        return self.specific_risk * 10000
+        """Specific risk contribution in basis points."""
+        return self.specific_risk_contribution * 10000
         
     def get_top_factor_contributions(self, n: int = 5) -> Dict[str, float]:
         """Get top N factor contributions by absolute value."""
@@ -160,8 +164,10 @@ class RiskResult:
         """Convert to dictionary for serialization/export."""
         return {
             'total_risk': self.total_risk,
-            'factor_risk': self.factor_risk,
-            'specific_risk': self.specific_risk,
+            'factor_risk_contribution': self.factor_risk_contribution,
+            'specific_risk_contribution': self.specific_risk_contribution,
+            'factor_volatility': self.factor_volatility,
+            'specific_volatility': self.specific_volatility,
             'factor_risk_pct': self.factor_risk_pct,
             'specific_risk_pct': self.specific_risk_pct,
             'factor_contributions': self.factor_contributions,
@@ -228,13 +234,15 @@ def analyze_portfolio_risk(
     factor_contributions = RiskCalculator.calculate_factor_contributions(
         model.beta, model.factor_covar, weights_array, portfolio_volatility
     )
-    factor_risk = np.sum(factor_contributions)
+    factor_risk_contribution = np.sum(factor_contributions)
+    factor_volatility = RiskCalculator.calculate_factor_risk(model.beta, model.factor_covar, weights_array)
     
     # Specific risk
     specific_contributions = RiskCalculator.calculate_specific_contributions(
         model.resvar, weights_array, portfolio_volatility
     )
-    specific_risk = np.sum(specific_contributions)
+    specific_risk_contribution = np.sum(specific_contributions)
+    specific_volatility = RiskCalculator.calculate_specific_risk(model.resvar, weights_array)
     
     # Asset-level contributions  
     marginal_contributions = RiskCalculator.calculate_marginal_contributions(
@@ -255,16 +263,19 @@ def analyze_portfolio_risk(
     # Validation
     validation = RiskCalculator.validate_risk_decomposition(
         portfolio_volatility,
-        {'factor_risk': factor_risk, 'specific_risk': specific_risk}
+        {'factor_risk': factor_risk_contribution, 'specific_risk': specific_risk_contribution}
     )
     
     # Apply annualization if requested
     if annualize and hasattr(model, 'frequency'):
         annualized_results = RiskAnnualizer.annualize_risk_results({
             'portfolio_volatility': portfolio_volatility,
-            'factor_risk': factor_risk,
-            'specific_risk': specific_risk
+            'factor_risk': factor_risk_contribution,
+            'specific_risk': specific_risk_contribution
         }, model.frequency)
+        
+        annualized_factor_volatility = RiskAnnualizer.annualize_volatility(factor_volatility, model.frequency)
+        annualized_specific_volatility = RiskAnnualizer.annualize_volatility(specific_volatility, model.frequency)
         
         # Annualize contributions
         annualized_factor_contrib = RiskAnnualizer.annualize_contributions(factor_contributions, model.frequency)
@@ -288,8 +299,10 @@ def analyze_portfolio_risk(
         
         return RiskResult(
             total_risk=annualized_results['portfolio_volatility'],
-            factor_risk=annualized_results['factor_risk'], 
-            specific_risk=annualized_results['specific_risk'],
+            factor_risk_contribution=annualized_results['factor_risk'], 
+            specific_risk_contribution=annualized_results['specific_risk'],
+            factor_volatility=annualized_factor_volatility,
+            specific_volatility=annualized_specific_volatility,
             factor_contributions=dict(zip(factor_names, annualized_factor_contrib)),
             asset_contributions=dict(zip(asset_names, annualized_asset_contrib)),
             factor_exposures=dict(zip(factor_names, factor_exposures)),
@@ -324,8 +337,10 @@ def analyze_portfolio_risk(
         
         return RiskResult(
             total_risk=portfolio_volatility,
-            factor_risk=factor_risk,
-            specific_risk=specific_risk,
+            factor_risk_contribution=factor_risk_contribution,
+            specific_risk_contribution=specific_risk_contribution,
+            factor_volatility=factor_volatility,
+            specific_volatility=specific_volatility,
             factor_contributions=dict(zip(factor_names, factor_contributions)),
             asset_contributions=dict(zip(asset_names, asset_contributions)),
             factor_exposures=dict(zip(factor_names, factor_exposures)),
@@ -414,8 +429,10 @@ def analyze_active_risk(
     # Use active model if provided, otherwise use portfolio model
     if active_model is None:
         active_model = portfolio_model
-    
-    # Calculate total active risk using RiskCalculator 
+
+    if cross_covar is None:
+        cross_covar = RiskCalculator.calculate_cross_covariance(benchmark_model.asset_returns, active_model.asset_returns)
+    # Calculate total active risk using RiskCalculator
     total_active_risk = RiskCalculator.calculate_active_risk(
         benchmark_model.covar,
         port_weights_array,
@@ -442,16 +459,35 @@ def analyze_active_risk(
     )
     
     # Cross-correlation component
-    cross_risk = 0.0
+    cross_correlation_risk_contribution = 0.0
+    cross_correlation_volatility = 0.0
     if cross_covar is not None:
         cross_euler = RiskCalculator.calculate_euler_cross_contributions(
             cross_covar, active_weights_array, port_weights_array, total_active_risk
         )
-        cross_risk = cross_euler
+        cross_correlation_risk_contribution = cross_euler
+        # For volatility, use the cross-variance contribution directly
+        cross_variance = RiskCalculator.calculate_cross_variance_contribution(
+            cross_covar, active_weights_array, port_weights_array
+        )
+        cross_correlation_volatility = np.sqrt(abs(cross_variance)) if cross_variance != 0 else 0.0
     
-    # Total factor and specific risk
-    factor_risk = allocation_factor_risk + selection_factor_risk
-    specific_risk = allocation_specific_risk + selection_specific_risk
+    # Calculate factor and specific risk volatilities (standalone)
+    factor_volatility = np.sqrt(allocation_factor_risk ** 2 + selection_factor_risk ** 2)
+    specific_volatility = np.sqrt(allocation_specific_risk ** 2 + selection_specific_risk ** 2)
+    
+    # Calculate factor and specific risk contributions (Euler contributions - summable)
+    if total_active_risk > 0:
+        allocation_factor_contribution = allocation_factor_risk ** 2 / total_active_risk
+        allocation_specific_contribution = allocation_specific_risk ** 2 / total_active_risk
+        selection_factor_contribution = selection_factor_risk ** 2 / total_active_risk  
+        selection_specific_contribution = selection_specific_risk ** 2 / total_active_risk
+        
+        factor_risk_contribution = allocation_factor_contribution + selection_factor_contribution
+        specific_risk_contribution = allocation_specific_contribution + selection_specific_contribution
+    else:
+        factor_risk_contribution = 0.0
+        specific_risk_contribution = 0.0
     
     # Factor contributions (simplified approach)
     active_exposures = RiskCalculator.calculate_factor_exposures(
@@ -540,7 +576,7 @@ def analyze_active_risk(
         allocation_specific_risk, 
         selection_factor_risk,
         selection_specific_risk,
-        cross_risk
+        cross_correlation_risk_contribution
     )
     
     # Apply annualization if requested
@@ -548,9 +584,13 @@ def analyze_active_risk(
     if annualize:
         annualized_results = RiskAnnualizer.annualize_risk_results({
             'portfolio_volatility': total_active_risk,
-            'factor_risk': factor_risk,
-            'specific_risk': specific_risk
+            'factor_risk_contribution': factor_risk_contribution,
+            'specific_risk_contribution': specific_risk_contribution,
+            'cross_correlation_risk_contribution': cross_correlation_risk_contribution
         }, frequency)
+        
+        annualized_factor_volatility = RiskAnnualizer.annualize_volatility(factor_volatility, frequency)
+        annualized_specific_volatility = RiskAnnualizer.annualize_volatility(specific_volatility, frequency)
         
         annualized_factor_contrib = RiskAnnualizer.annualize_contributions(factor_contributions, frequency)
         annualized_asset_contrib = RiskAnnualizer.annualize_contributions(asset_contributions, frequency)
@@ -568,8 +608,10 @@ def analyze_active_risk(
         
         return RiskResult(
             total_risk=annualized_results['portfolio_volatility'],
-            factor_risk=annualized_results['factor_risk'],
-            specific_risk=annualized_results['specific_risk'],
+            factor_risk_contribution=annualized_results['factor_risk_contribution'],
+            specific_risk_contribution=annualized_results['specific_risk_contribution'],
+            factor_volatility=annualized_factor_volatility,
+            specific_volatility=annualized_specific_volatility,
             factor_contributions=dict(zip(factor_names, annualized_factor_contrib)),
             asset_contributions=dict(zip(asset_names, annualized_asset_contrib)),
             factor_exposures=dict(zip(factor_names, active_exposures)),
@@ -584,7 +626,8 @@ def analyze_active_risk(
             allocation_specific_risk=RiskAnnualizer.annualize_volatility(allocation_specific_risk, frequency),
             selection_factor_risk=RiskAnnualizer.annualize_volatility(selection_factor_risk, frequency),
             selection_specific_risk=RiskAnnualizer.annualize_volatility(selection_specific_risk, frequency),
-            cross_correlation_risk=RiskAnnualizer.annualize_volatility(cross_risk, frequency),
+            cross_correlation_risk_contribution=RiskAnnualizer.annualize_contributions(np.array([cross_correlation_risk_contribution]), frequency)[0],
+            cross_correlation_volatility=RiskAnnualizer.annualize_volatility(cross_correlation_volatility, frequency),
             
             # Asset-level active breakdowns
             asset_allocation_factor=dict(zip(asset_names, annualized_asset_allocation_factor)),
@@ -611,8 +654,10 @@ def analyze_active_risk(
     else:
         return RiskResult(
             total_risk=total_active_risk,
-            factor_risk=factor_risk,
-            specific_risk=specific_risk,
+            factor_risk_contribution=factor_risk_contribution,
+            specific_risk_contribution=specific_risk_contribution,
+            factor_volatility=factor_volatility,
+            specific_volatility=specific_volatility,
             factor_contributions=dict(zip(factor_names, factor_contributions)),
             asset_contributions=dict(zip(asset_names, asset_contributions)),
             factor_exposures=dict(zip(factor_names, active_exposures)),
@@ -627,7 +672,8 @@ def analyze_active_risk(
             allocation_specific_risk=allocation_specific_risk,
             selection_factor_risk=selection_factor_risk, 
             selection_specific_risk=selection_specific_risk,
-            cross_correlation_risk=cross_risk,
+            cross_correlation_risk_contribution=cross_correlation_risk_contribution,
+            cross_correlation_volatility=cross_correlation_volatility,
             
             # Asset-level active breakdowns
             asset_allocation_factor=dict(zip(asset_names, asset_allocation_factor)),
