@@ -278,28 +278,53 @@ class DataAccessService:
             logger.error(f"Error getting specific risk for {component_id}/{lens}: {e}")
             return 0.0
     
-    def get_risk_decomposition(self, component_id: str, lens: str) -> Dict[str, float]:
+    def get_risk_decomposition(self, component_id: str, lens: str) -> Dict[str, Any]:
         """
-        Get risk decomposition (factor vs specific) for a component and lens.
+        Get comprehensive risk decomposition for a component and lens.
         
         Args:
             component_id: Component identifier
             lens: Risk lens ('portfolio', 'benchmark', 'active')
             
         Returns:
-            Dictionary with factor_risk and specific_risk
+            Dictionary with complete risk decomposition data including:
+            - Basic risk metrics (total_risk, factor_risk_contribution, etc.)
+            - Factor-level data (factor_contributions, factor_exposures)
+            - Asset-level data (asset_contributions, portfolio_weights)
         """
         try:
             risk_data = self.risk_analysis_service.get_risk_results(component_id, lens)
             return {
+                # Basic risk metrics
                 "factor_risk_contribution": risk_data.get("factor_risk_contribution", 0.0),
                 "specific_risk_contribution": risk_data.get("specific_risk_contribution", 0.0),
                 "cross_correlation_risk_contribution": risk_data.get("cross_correlation_risk_contribution", 0.0),
-                "total_risk": risk_data.get("total_risk", 0.0)
+                "total_risk": risk_data.get("total_risk", 0.0),
+                "factor_volatility": risk_data.get("factor_volatility", 0.0),
+                "specific_volatility": risk_data.get("specific_volatility", 0.0),
+                "cross_correlation_volatility": risk_data.get("cross_correlation_volatility", 0.0),
+                # Factor-level data
+                "factor_contributions": risk_data.get("factor_contributions", {}),
+                "factor_exposures": risk_data.get("factor_exposures", {}),
+                # Asset-level data
+                "asset_contributions": risk_data.get("asset_contributions", {}),
+                "portfolio_weights": risk_data.get("portfolio_weights", {})
             }
         except Exception as e:
             logger.error(f"Error getting risk decomposition for {component_id}/{lens}: {e}")
-            return {"factor_risk_contribution": 0.0, "specific_risk_contribution": 0.0, "cross_correlation_risk_contribution": 0.0, "total_risk": 0.0}
+            return {
+                "factor_risk_contribution": 0.0, 
+                "specific_risk_contribution": 0.0, 
+                "cross_correlation_risk_contribution": 0.0, 
+                "total_risk": 0.0,
+                "factor_volatility": 0.0,
+                "specific_volatility": 0.0,
+                "cross_correlation_volatility": 0.0,
+                "factor_contributions": {},
+                "factor_exposures": {},
+                "asset_contributions": {},
+                "portfolio_weights": {}
+            }
 
     def get_factor_exposure(self, component_id: str, lens: str) -> List[Tuple[str, float]]:
         """

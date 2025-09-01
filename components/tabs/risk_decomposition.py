@@ -4,7 +4,7 @@ Risk Decomposition Tab for Maverick UI
 This module provides comprehensive risk decomposition analysis using the simplified
 risk API with direct RiskResult access for optimal performance, displaying:
 1. Risk summary KPIs (total volatility, factor/specific/cross-correlation contributions)  
-2. Factor analysis (exposures and contributions)
+2. Factor analysis charts (factor contributions and exposures bar charts)
 3. Component analysis table (weights and risk contributions)
 4. Risk matrices (weighted betas and factor risk contributions)
 
@@ -26,7 +26,7 @@ import os
 
 # Add parent directories for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
-from utils.formatters import format_basis_points, format_percentage, format_decimal, truncate_component_name
+from utils.formatters import format_basis_points, format_percentage, format_decimal, truncate_component_name, clean_factor_name
 from utils.colors import get_chart_color
 
 def render_risk_decomposition_tab(data_access_service, sidebar_state):
@@ -62,6 +62,11 @@ def render_risk_decomposition_tab(data_access_service, sidebar_state):
     
     # Row 1: Risk Summary KPIs
     render_risk_summary_kpis(risk_data)
+    
+    st.divider()
+    
+    # Row 2: Factor Analysis Charts
+    render_factor_analysis_charts(risk_data)
     
     st.divider()
     
@@ -162,6 +167,165 @@ def render_risk_summary_kpis(risk_data: Dict[str, Any]):
             st.success("✓ Euler identity validated: All risk contributions sum to total risk")
 
 
+
+
+# =====================================================================
+# ROW 2: FACTOR ANALYSIS CHARTS
+# =====================================================================
+
+def render_factor_analysis_charts(risk_data: Dict[str, Any]):
+    """
+    Render Row 2: Factor-level analysis with contributions and exposures charts.
+    
+    Parameters
+    ----------
+    risk_data : Dict[str, Any]
+        Risk data extracted from schema containing factor_contributions and factor_exposures
+    """
+    st.subheader("Factor Analysis")
+    
+    # Extract factor data
+    factor_contributions = risk_data.get('factor_contributions', {})
+    factor_exposures = risk_data.get('factor_exposures', {})
+    
+    if not factor_contributions and not factor_exposures:
+        st.info("Factor analysis data not available for this component/lens combination.")
+        return
+    
+    # Create two-column layout
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Factor Risk Contributions**")
+        if factor_contributions:
+            contributions_chart = create_factor_contributions_chart(factor_contributions)
+            st.plotly_chart(contributions_chart, use_container_width=True)
+        else:
+            st.info("Factor contributions data not available")
+    
+    with col2:
+        st.markdown("**Factor Exposures**")
+        if factor_exposures:
+            exposures_chart = create_factor_exposures_chart(factor_exposures)
+            st.plotly_chart(exposures_chart, use_container_width=True)
+        else:
+            st.info("Factor exposures data not available")
+
+
+def create_factor_contributions_chart(factor_contributions: Dict[str, float]) -> go.Figure:
+    """
+    Create a horizontal bar chart for factor risk contributions.
+    
+    Parameters
+    ----------
+    factor_contributions : Dict[str, float]
+        Dictionary of factor names to contribution values
+        
+    Returns
+    -------
+    go.Figure
+        Plotly bar chart figure
+    """
+    if not factor_contributions:
+        return go.Figure()
+    
+    # Sort factors by absolute contribution (descending)
+    sorted_factors = sorted(factor_contributions.items(), key=lambda x: abs(x[1]), reverse=True)
+    factor_names = [clean_factor_name(name) for name, _ in sorted_factors]
+    contributions = [value for _, value in sorted_factors]
+    
+    # Create colors based on positive/negative values
+    colors = [get_chart_color("positive") if val >= 0 else get_chart_color("negative") for val in contributions]
+    
+    # Create horizontal bar chart
+    fig = go.Figure(data=go.Bar(
+        y=factor_names,
+        x=contributions,
+        orientation='h',
+        marker_color=colors,
+        hovertemplate='<b>%{y}</b><br>' +
+                      'Contribution: %{customdata}<br>' +
+                      '<extra></extra>',
+        customdata=[format_basis_points(val) for val in contributions]
+    ))
+    
+    fig.update_layout(
+        title="Risk Contribution by Factor",
+        xaxis_title="Risk Contribution",
+        yaxis_title="Factors",
+        height=400,
+        font=dict(size=11),
+        showlegend=False,
+        margin=dict(l=120, r=20, t=50, b=50)
+    )
+    
+    # Format x-axis as basis points
+    fig.update_xaxes(
+        tickformat=",.0f",
+        title="Risk Contribution (bps)"
+    )
+    
+    # Convert x-axis values to basis points for display
+    contributions_bps = [val * 10000 for val in contributions]
+    fig.data[0].x = contributions_bps
+    
+    return fig
+
+
+def create_factor_exposures_chart(factor_exposures: Dict[str, float]) -> go.Figure:
+    """
+    Create a horizontal bar chart for factor exposures.
+    
+    Parameters
+    ----------
+    factor_exposures : Dict[str, float]
+        Dictionary of factor names to exposure values
+        
+    Returns
+    -------
+    go.Figure
+        Plotly bar chart figure
+    """
+    if not factor_exposures:
+        return go.Figure()
+    
+    # Sort factors by absolute exposure (descending)
+    sorted_factors = sorted(factor_exposures.items(), key=lambda x: abs(x[1]), reverse=True)
+    factor_names = [clean_factor_name(name) for name, _ in sorted_factors]
+    exposures = [value for _, value in sorted_factors]
+    
+    # Create colors based on positive/negative values
+    colors = [get_chart_color("positive") if val >= 0 else get_chart_color("negative") for val in exposures]
+    
+    # Create horizontal bar chart
+    fig = go.Figure(data=go.Bar(
+        y=factor_names,
+        x=exposures,
+        orientation='h',
+        marker_color=colors,
+        hovertemplate='<b>%{y}</b><br>' +
+                      'Exposure: %{customdata}<br>' +
+                      '<extra></extra>',
+        customdata=[format_decimal(val, 4) for val in exposures]
+    ))
+    
+    fig.update_layout(
+        title="Factor Exposures",
+        xaxis_title="Exposure",
+        yaxis_title="Factors",
+        height=400,
+        font=dict(size=11),
+        showlegend=False,
+        margin=dict(l=120, r=20, t=50, b=50)
+    )
+    
+    # Format x-axis as decimal
+    fig.update_xaxes(
+        tickformat=".3f",
+        title="Factor Exposure"
+    )
+    
+    return fig
 
 
 # =====================================================================
