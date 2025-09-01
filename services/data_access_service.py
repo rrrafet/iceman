@@ -294,6 +294,34 @@ class DataAccessService:
         """
         try:
             risk_data = self.risk_analysis_service.get_risk_results(component_id, lens)
+            
+            # Check if risk_data contains an error or is None/empty
+            if not risk_data or "error" in risk_data:
+                error_msg = risk_data.get("error", "Unknown error") if risk_data else "No risk data returned"
+                logger.error(f"Risk results unavailable for {component_id}/{lens}: {error_msg}")
+                
+                # Get detailed status for debugging
+                debug_info = self.get_risk_computation_debug_info()
+                logger.error(f"Debug info: {debug_info}")
+                
+                return self._get_empty_risk_decomposition_with_debug(component_id, lens, error_msg)
+            
+            # Extract matrix data with enhanced logging
+            weighted_betas = risk_data.get("weighted_betas", {})
+            asset_by_factor_contributions = risk_data.get("asset_by_factor_contributions", {})
+            
+            # Log detailed matrix data information
+            logger.info(f"Matrix data for {component_id}/{lens}:")
+            logger.info(f"  weighted_betas: type={type(weighted_betas).__name__}, "
+                       f"empty={len(weighted_betas) == 0 if hasattr(weighted_betas, '__len__') else 'N/A'}")
+            logger.info(f"  asset_by_factor_contributions: type={type(asset_by_factor_contributions).__name__}, "
+                       f"empty={len(asset_by_factor_contributions) == 0 if hasattr(asset_by_factor_contributions, '__len__') else 'N/A'}")
+            
+            if weighted_betas:
+                logger.info(f"  weighted_betas keys: {list(weighted_betas.keys())[:5]}...")  # First 5 keys
+            if asset_by_factor_contributions:
+                logger.info(f"  asset_by_factor_contributions keys: {list(asset_by_factor_contributions.keys())[:5]}...")  # First 5 keys
+            
             return {
                 # Basic risk metrics
                 "factor_risk_contribution": risk_data.get("factor_risk_contribution", 0.0),
@@ -308,23 +336,17 @@ class DataAccessService:
                 "factor_exposures": risk_data.get("factor_exposures", {}),
                 # Asset-level data
                 "asset_contributions": risk_data.get("asset_contributions", {}),
-                "portfolio_weights": risk_data.get("portfolio_weights", {})
+                "portfolio_weights": risk_data.get("portfolio_weights", {}),
+                # Matrix data (for heatmaps)
+                "weighted_betas": weighted_betas,
+                "asset_by_factor_contributions": asset_by_factor_contributions
             }
         except Exception as e:
             logger.error(f"Error getting risk decomposition for {component_id}/{lens}: {e}")
-            return {
-                "factor_risk_contribution": 0.0, 
-                "specific_risk_contribution": 0.0, 
-                "cross_correlation_risk_contribution": 0.0, 
-                "total_risk": 0.0,
-                "factor_volatility": 0.0,
-                "specific_volatility": 0.0,
-                "cross_correlation_volatility": 0.0,
-                "factor_contributions": {},
-                "factor_exposures": {},
-                "asset_contributions": {},
-                "portfolio_weights": {}
-            }
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            
+            return self._get_empty_risk_decomposition_with_debug(component_id, lens, str(e))
 
     def get_factor_exposure(self, component_id: str, lens: str) -> List[Tuple[str, float]]:
         """
@@ -721,3 +743,205 @@ class DataAccessService:
         except Exception as e:
             logger.error(f"Error getting service status: {e}")
             return {"error": str(e)}
+    
+    def get_risk_computation_debug_info(self) -> Dict[str, Any]:
+        """
+        Get debug information about risk computation status.
+        
+        Returns:
+            Dictionary with detailed debug information
+        """
+        try:
+            debug_info = {
+                "service_available": self.risk_analysis_service is not None,
+                "detailed_status": {}
+            }
+            
+            if self.risk_analysis_service:
+                # Get detailed status from risk analysis service
+                if hasattr(self.risk_analysis_service, 'get_detailed_status'):
+                    debug_info["detailed_status"] = self.risk_analysis_service.get_detailed_status()
+                else:
+                    debug_info["detailed_status"] = self.risk_analysis_service.get_analysis_status()
+            
+            return debug_info
+            
+        except Exception as e:
+            return {"debug_error": f"Error getting debug info: {e}"}
+    
+    def _get_empty_risk_decomposition_with_debug(self, component_id: str, lens: str, error_msg: str) -> Dict[str, Any]:
+        """
+        Return empty risk decomposition with debug information.
+        
+        Args:
+            component_id: Component identifier
+            lens: Risk lens
+            error_msg: Error message
+            
+        Returns:
+            Empty risk decomposition with debug info
+        """
+        return {
+            "factor_risk_contribution": 0.0, 
+            "specific_risk_contribution": 0.0, 
+            "cross_correlation_risk_contribution": 0.0, 
+            "total_risk": 0.0,
+            "factor_volatility": 0.0,
+            "specific_volatility": 0.0,
+            "cross_correlation_volatility": 0.0,
+            "factor_contributions": {},
+            "factor_exposures": {},
+            "asset_contributions": {},
+            "portfolio_weights": {},
+            "weighted_betas": {},
+            "asset_by_factor_contributions": {},
+            # Debug information
+            "_debug_info": {
+                "error": error_msg,
+                "component_id": component_id,
+                "lens": lens,
+                "timestamp": pd.Timestamp.now().isoformat()
+            }
+        }
+    
+    def validate_risk_computation_setup(self) -> Dict[str, Any]:
+        """
+        Validate that risk computation is properly set up.
+        
+        Returns:
+            Dictionary with validation results
+        """
+        try:
+            validation = {
+                "valid": True,
+                "errors": [],
+                "warnings": [],
+                "components": {}
+            }
+            
+            # Check if risk analysis service is available
+            if not self.risk_analysis_service:
+                validation["errors"].append("RiskAnalysisService not available")
+                validation["valid"] = False
+                return validation
+            
+            # Get detailed status
+            if hasattr(self.risk_analysis_service, 'get_detailed_status'):
+                status = self.risk_analysis_service.get_detailed_status()
+                
+                # Check prerequisites
+                prereqs = status.get('prerequisites', {})
+                if not prereqs.get('valid', False):
+                    validation["errors"].extend(prereqs.get('errors', []))
+                    validation["warnings"].extend(prereqs.get('warnings', []))
+                
+                # Check portfolio graph
+                portfolio_graph = status.get('portfolio_graph', {})
+                if not portfolio_graph:
+                    validation["errors"].append("PortfolioGraph status not available")
+                else:
+                    validation["components"]["portfolio_graph"] = portfolio_graph
+                
+                # Check risk computation
+                risk_computation = status.get('risk_computation', {})
+                validation["components"]["risk_computation"] = risk_computation
+            
+            validation["valid"] = len(validation["errors"]) == 0
+            return validation
+            
+        except Exception as e:
+            return {
+                "valid": False,
+                "errors": [f"Error during validation: {e}"],
+                "warnings": [],
+                "components": {}
+            }
+    
+    def debug_matrix_data_availability(self, component_id: str = "TOTAL", lens: str = "active") -> Dict[str, Any]:
+        """
+        Debug method to investigate matrix data availability in the risk calculation pipeline.
+        
+        Args:
+            component_id: Component to investigate (default: "TOTAL")
+            lens: Risk lens to investigate (default: "active")
+            
+        Returns:
+            Detailed debug information about matrix data
+        """
+        debug_info = {
+            "component_id": component_id,
+            "lens": lens,
+            "timestamp": pd.Timestamp.now().isoformat(),
+            "pipeline_stages": {}
+        }
+        
+        try:
+            # Stage 1: Check RiskAnalysisService
+            if not self.risk_analysis_service:
+                debug_info["pipeline_stages"]["risk_analysis_service"] = "NOT_AVAILABLE"
+                return debug_info
+            
+            # Stage 2: Get raw risk result from computation
+            risk_computation = getattr(self.risk_analysis_service, 'risk_computation', None)
+            if risk_computation:
+                raw_risk_result = risk_computation.get_risk_result(component_id, lens)
+                
+                debug_info["pipeline_stages"]["raw_risk_result"] = {
+                    "available": raw_risk_result is not None,
+                    "type": type(raw_risk_result).__name__ if raw_risk_result else None
+                }
+                
+                if raw_risk_result:
+                    # Check if raw result has matrix data
+                    weighted_betas_raw = getattr(raw_risk_result, 'weighted_betas', None)
+                    asset_by_factor_raw = getattr(raw_risk_result, 'asset_by_factor_contributions', None)
+                    
+                    debug_info["pipeline_stages"]["raw_risk_result"].update({
+                        "weighted_betas": {
+                            "exists": weighted_betas_raw is not None,
+                            "type": type(weighted_betas_raw).__name__ if weighted_betas_raw is not None else None,
+                            "empty": len(weighted_betas_raw) == 0 if weighted_betas_raw and hasattr(weighted_betas_raw, '__len__') else "N/A"
+                        },
+                        "asset_by_factor_contributions": {
+                            "exists": asset_by_factor_raw is not None,
+                            "type": type(asset_by_factor_raw).__name__ if asset_by_factor_raw is not None else None,
+                            "empty": len(asset_by_factor_raw) == 0 if asset_by_factor_raw and hasattr(asset_by_factor_raw, '__len__') else "N/A"
+                        }
+                    })
+            else:
+                debug_info["pipeline_stages"]["raw_risk_result"] = "RISK_COMPUTATION_NOT_AVAILABLE"
+            
+            # Stage 3: Check formatted risk result from service
+            formatted_risk_result = self.risk_analysis_service.get_risk_results(component_id, lens)
+            debug_info["pipeline_stages"]["formatted_risk_result"] = {
+                "available": formatted_risk_result is not None and "error" not in formatted_risk_result,
+                "has_weighted_betas": "weighted_betas" in formatted_risk_result if formatted_risk_result else False,
+                "has_asset_by_factor": "asset_by_factor_contributions" in formatted_risk_result if formatted_risk_result else False
+            }
+            
+            if formatted_risk_result and "error" not in formatted_risk_result:
+                weighted_betas_formatted = formatted_risk_result.get("weighted_betas", {})
+                asset_by_factor_formatted = formatted_risk_result.get("asset_by_factor_contributions", {})
+                
+                debug_info["pipeline_stages"]["formatted_risk_result"].update({
+                    "weighted_betas_empty": len(weighted_betas_formatted) == 0 if hasattr(weighted_betas_formatted, '__len__') else True,
+                    "asset_by_factor_empty": len(asset_by_factor_formatted) == 0 if hasattr(asset_by_factor_formatted, '__len__') else True,
+                    "weighted_betas_sample": list(weighted_betas_formatted.keys())[:3] if weighted_betas_formatted else [],
+                    "asset_by_factor_sample": list(asset_by_factor_formatted.keys())[:3] if asset_by_factor_formatted else []
+                })
+            
+            # Stage 4: Check final DataAccessService result
+            final_result = self.get_risk_decomposition(component_id, lens)
+            debug_info["pipeline_stages"]["final_result"] = {
+                "available": final_result is not None,
+                "has_debug_info": "_debug_info" in final_result if final_result else False,
+                "weighted_betas_empty": len(final_result.get("weighted_betas", {})) == 0 if final_result else True,
+                "asset_by_factor_empty": len(final_result.get("asset_by_factor_contributions", {})) == 0 if final_result else True
+            }
+            
+        except Exception as e:
+            debug_info["error"] = f"Debug method failed: {e}"
+            import traceback
+            debug_info["traceback"] = traceback.format_exc()
+        
+        return debug_info

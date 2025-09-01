@@ -5,8 +5,8 @@ This module provides comprehensive risk decomposition analysis using the simplif
 risk API with direct RiskResult access for optimal performance, displaying:
 1. Risk summary KPIs (total volatility, factor/specific/cross-correlation contributions)  
 2. Factor analysis charts (factor contributions and exposures bar charts)
-3. Component analysis table (weights and risk contributions)
-4. Risk matrices (weighted betas and factor risk contributions)
+3. Risk matrix heatmaps (asset-factor contributions and weighted betas matrices)
+4. Component analysis table (weights and risk contributions)
 
 For active risk analysis, displays all four components:
 - Factor risk contribution (summable)
@@ -49,8 +49,8 @@ def render_risk_decomposition_tab(data_access_service, sidebar_state):
     # render_data_availability_diagnostics(data_access_service, sidebar_state)
     
     # Extract risk decomposition data for current selection
-    risk_data = data_access_service.get_risk_decomposition(sidebar_state.selected_component_id, lens)
-    
+    risk_data = data_access_service.get_risk_decomposition(sidebar_state.selected_component_id, sidebar_state.lens)
+
     # Debug: Show available risk data fields for development
     if st.checkbox("Show debug info (available risk data fields)"):
         st.json({k: type(v).__name__ for k, v in risk_data.items() if risk_data})
@@ -67,6 +67,11 @@ def render_risk_decomposition_tab(data_access_service, sidebar_state):
     
     # Row 2: Factor Analysis Charts
     render_factor_analysis_charts(risk_data)
+    
+    st.divider()
+    
+    # Row 3: Risk Matrix Heatmaps
+    render_risk_matrices(risk_data)
     
     st.divider()
     
@@ -329,6 +334,219 @@ def create_factor_exposures_chart(factor_exposures: Dict[str, float]) -> go.Figu
 
 
 # =====================================================================
+# ROW 3: RISK MATRIX HEATMAPS
+# =====================================================================
+
+def render_risk_matrices(risk_data: Dict[str, Any]):
+    """
+    Render Row 3: Risk matrix heatmaps showing asset-factor interactions.
+    
+    Parameters
+    ----------
+    risk_data : Dict[str, Any]
+        Risk data containing weighted_betas and asset_by_factor_contributions matrices
+    """
+    st.subheader("Risk Matrix Analysis")
+    
+    # Extract matrix data
+    weighted_betas = risk_data.get('weighted_betas', {})
+    asset_by_factor_contributions = risk_data.get('asset_by_factor_contributions', {})
+    
+    if not weighted_betas and not asset_by_factor_contributions:
+        st.info("Matrix data not available for this component/lens combination. This may require risk model recomputation.")
+        return
+    
+    # Create two-column layout
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Asset-Factor Risk Contributions Matrix**")
+        if asset_by_factor_contributions:
+            contributions_heatmap = create_asset_factor_contributions_heatmap(asset_by_factor_contributions, risk_data)
+            st.plotly_chart(contributions_heatmap, use_container_width=True)
+        else:
+            st.info("Asset-factor contributions matrix not available")
+    
+    with col2:
+        st.markdown("**Weighted Beta Matrix**")
+        if weighted_betas:
+            weighted_betas_heatmap = create_weighted_betas_heatmap(weighted_betas, risk_data)
+            st.plotly_chart(weighted_betas_heatmap, use_container_width=True)
+        else:
+            st.info("Weighted betas matrix not available")
+
+
+def create_asset_factor_contributions_heatmap(asset_by_factor_dict: Dict[str, Dict[str, float]], risk_data: Dict[str, Any]) -> go.Figure:
+    """
+    Create a heatmap for asset-factor risk contributions matrix.
+    
+    Parameters
+    ----------
+    asset_by_factor_dict : Dict[str, Dict[str, float]]
+        Nested dictionary: asset_name -> factor_name -> contribution_value
+    risk_data : Dict[str, Any]
+        Risk data containing asset name mappings
+        
+    Returns
+    -------
+    go.Figure
+        Plotly heatmap figure
+    """
+    if not asset_by_factor_dict:
+        return go.Figure()
+    
+    # Convert nested dict to matrix format
+    data_matrix, asset_names, factor_names = _convert_nested_dict_to_matrix(asset_by_factor_dict)
+    print(np.array(data_matrix).shape, asset_names, factor_names)
+    
+    if data_matrix is None:
+        return go.Figure()
+    
+    # Convert to basis points for display
+    data_matrix_bps = np.array(data_matrix) * 10000
+    print(data_matrix_bps)
+    
+    # Get display names using name mapping from risk data
+    display_asset_names = _get_display_asset_names(asset_names, risk_data)
+    display_factor_names = [clean_factor_name(name) for name in factor_names]
+    
+    fig = go.Figure(data=go.Heatmap(
+        z=data_matrix_bps,
+        x=display_factor_names,
+        y=display_asset_names,
+        colorscale="RdBu",
+        zmid=0,
+        hoverongaps=False,
+        colorbar=dict(title="Risk Contribution (bps)"),
+        hovertemplate='<b>Asset:</b> %{y}<br>' +
+                      '<b>Factor:</b> %{x}<br>' +
+                      '<b>Contribution:</b> %{z:.1f} bps<br>' +
+                      '<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title="Asset × Factor Risk Contributions",
+        xaxis_title="Factors",
+        yaxis_title="Assets",
+        height=max(400, len(asset_names) * 25 + 150),
+        font=dict(size=10),
+        margin=dict(l=120, r=20, t=50, b=50)
+    )
+    
+    return fig
+
+
+def create_weighted_betas_heatmap(weighted_betas_dict: Dict[str, Dict[str, float]], risk_data: Dict[str, Any]) -> go.Figure:
+    """
+    Create a heatmap for weighted betas matrix.
+    
+    Parameters
+    ----------
+    weighted_betas_dict : Dict[str, Dict[str, float]]
+        Nested dictionary: asset_name -> factor_name -> weighted_beta_value
+    risk_data : Dict[str, Any]
+        Risk data containing asset name mappings
+        
+    Returns
+    -------
+    go.Figure
+        Plotly heatmap figure
+    """
+    if not weighted_betas_dict:
+        return go.Figure()
+    
+    # Convert nested dict to matrix format
+    data_matrix, asset_names, factor_names = _convert_nested_dict_to_matrix(weighted_betas_dict)
+    
+    if data_matrix is None:
+        return go.Figure()
+    
+    # Get display names using name mapping from risk data
+    display_asset_names = _get_display_asset_names(asset_names, risk_data)
+    display_factor_names = [clean_factor_name(name) for name in factor_names]
+    
+    fig = go.Figure(data=go.Heatmap(
+        z=data_matrix,
+        x=display_factor_names,
+        y=display_asset_names,
+        colorscale="Viridis",
+        hoverongaps=False,
+        colorbar=dict(title="Weighted Beta"),
+        hovertemplate='<b>Asset:</b> %{y}<br>' +
+                      '<b>Factor:</b> %{x}<br>' +
+                      '<b>Weighted Beta:</b> %{z:.4f}<br>' +
+                      '<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title="Asset × Factor Weighted Betas",
+        xaxis_title="Factors",
+        yaxis_title="Assets",
+        height=max(400, len(asset_names) * 25 + 150),
+        font=dict(size=10),
+        margin=dict(l=120, r=20, t=50, b=50)
+    )
+    
+    return fig
+
+
+def _convert_nested_dict_to_matrix(nested_dict: Dict[str, Dict[str, float]], max_assets: int = 15) -> Tuple[Optional[List[List[float]]], List[str], List[str]]:
+    """
+    Convert nested dictionary to matrix format for heatmap visualization.
+    
+    Parameters
+    ----------
+    nested_dict : Dict[str, Dict[str, float]]
+        Nested dictionary: outer_key -> inner_key -> value
+    max_assets : int, default 15
+        Maximum number of assets to include (top contributors)
+        
+    Returns
+    -------
+    Tuple[Optional[List[List[float]]], List[str], List[str]]
+        (data_matrix, asset_names, factor_names) or (None, [], []) if conversion fails
+    """
+    if not nested_dict:
+        return None, [], []
+    
+    try:
+        # Get all asset and factor names
+        asset_names = list(nested_dict.keys())
+        
+        # Get factor names from first asset (assuming consistent structure)
+        if not asset_names or not nested_dict[asset_names[0]]:
+            return None, [], []
+        
+        factor_names = list(nested_dict[asset_names[0]].keys())
+        
+        # Limit to top assets by total absolute contribution to keep heatmap readable
+        if len(asset_names) > max_assets:
+            # Calculate total absolute contribution per asset
+            asset_totals = []
+            for asset in asset_names:
+                total_contrib = sum(abs(nested_dict[asset].get(factor, 0.0)) for factor in factor_names)
+                asset_totals.append((asset, total_contrib))
+            
+            # Sort by total contribution and take top N
+            top_assets = sorted(asset_totals, key=lambda x: x[1], reverse=True)[:max_assets]
+            asset_names = [asset for asset, _ in top_assets]
+        
+        # Build matrix: rows = assets, columns = factors
+        data_matrix = []
+        for asset in asset_names:
+            row = []
+            for factor in factor_names:
+                value = nested_dict[asset].get(factor, 0.0)
+                row.append(value)
+            data_matrix.append(row)
+        
+        return data_matrix, asset_names, factor_names
+        
+    except Exception:
+        return None, [], []
+
+
+# =====================================================================
 # HELPER FUNCTIONS
 # =====================================================================
 
@@ -413,6 +631,35 @@ def sort_and_filter_factors(factor_dict: Dict[str, float], top_n: int = 10) -> L
         return []
     
     return sorted(factor_dict.items(), key=lambda x: abs(x[1]), reverse=True)[:top_n]
+
+
+def _get_display_asset_names(asset_names: List[str], risk_data: Dict[str, Any]) -> List[str]:
+    """
+    Get display names for assets using name mapping from risk data.
+    
+    Parameters
+    ----------
+    asset_names : List[str]
+        List of asset component IDs
+    risk_data : Dict[str, Any]
+        Risk data containing asset_name_mapping
+        
+    Returns
+    -------
+    List[str]
+        List of display names for assets
+    """
+    asset_name_mapping = risk_data.get('asset_name_mapping', {})
+    
+    if asset_name_mapping:
+        # Use mapping if available
+        display_names = [asset_name_mapping.get(asset_id, asset_id.split("/")[-1]) for asset_id in asset_names]
+    else:
+        # Fallback to path splitting
+        display_names = [asset_id.split("/")[-1] for asset_id in asset_names]
+    
+    # Apply truncation for long names
+    return [truncate_component_name(name, 15) for name in display_names]
 
 
 def create_risk_matrix_heatmap(data: List[List[float]], x_labels: List[str], y_labels: List[str], 

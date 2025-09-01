@@ -147,6 +147,14 @@ class PortfolioDataProvider:
             # Get the constructed PortfolioGraph (with time series data)
             self._portfolio_graph = builder.build()
             
+            # Set root_id from builder_settings if specified
+            root_id = builder_settings.get('root_id')
+            if root_id:
+                self._portfolio_graph.root_id = root_id
+                logger.info(f"Set PortfolioGraph root_id to: {root_id}")
+            else:
+                logger.warning("No root_id specified in builder_settings")
+            
             logger.info(f"Built PortfolioGraph using {builder_class_name} with time series data")
             
         except ImportError as e:

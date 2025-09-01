@@ -94,11 +94,19 @@ class RiskComputation:
             # Run the visitor on the portfolio graph
             # This will populate the metric store with risk results
             root_component_id = self.portfolio_graph.root_id
+            logger.info(f"Starting risk decomposition from root component: {root_component_id}")
+            
             if root_component_id and root_component_id in self.portfolio_graph.components:
                 root_component = self.portfolio_graph.components[root_component_id]
+                logger.info(f"Root component found: {root_component.component_id} (type: {type(root_component).__name__})")
                 
                 # Execute visitor traversal
+                logger.info("Executing FactorRiskDecompositionVisitor traversal...")
                 root_component.accept(self._visitor)
+                logger.info("Visitor traversal completed")
+                
+                # Validate that risk results were stored
+                self._validate_risk_results_storage(root_component_id)
                 
                 # Update computation state
                 self._computation_timestamp = datetime.now()
@@ -245,17 +253,28 @@ class RiskComputation:
             logger.warning("Risk computation not performed - no results available")
             return None
         
+        if not self.portfolio_graph.metric_store:
+            logger.error("No metric store available in portfolio graph")
+            return None
+        
         try:
-            risk_result = self.portfolio_graph.metric_store.get_metric(
-                component_id, f'risk_result_{lens}'
-            )
+            metric_name = f'risk_result_{lens}'
+            logger.debug(f"Looking for metric '{metric_name}' for component '{component_id}'")
+            
+            risk_result = self.portfolio_graph.metric_store.get_metric(component_id, metric_name)
             
             if risk_result and hasattr(risk_result, 'value'):
-                return risk_result.value()
+                result = risk_result.value()
+                logger.debug(f"Found risk result for {component_id}/{lens}: {type(result).__name__}")
+                return result
             elif risk_result:
+                logger.debug(f"Found risk result for {component_id}/{lens}: {type(risk_result).__name__}")
                 return risk_result
             else:
-                logger.debug(f"No {lens} risk result found for component: {component_id}")
+                logger.warning(f"No {lens} risk result found for component: {component_id}")
+                
+                # Debug: List all available metrics for this component
+                self._debug_available_metrics(component_id)
                 return None
                 
         except Exception as e:
@@ -401,5 +420,120 @@ class RiskComputation:
                     str(self._last_factor_returns.index.max())
                 ) if hasattr(self._last_factor_returns.index, 'min') else None
             }
+        
+        return summary
+    
+    def _validate_risk_results_storage(self, root_component_id: str) -> None:
+        """
+        Validate that risk results were properly stored after visitor execution.
+        
+        Args:
+            root_component_id: Root component ID to validate
+        """
+        try:
+            if not self.portfolio_graph.metric_store:
+                logger.error("No metric store available for validation")
+                return
+            
+            # Check if any risk results were stored for the root component
+            lenses = ['portfolio', 'benchmark', 'active']
+            results_found = []
+            
+            for lens in lenses:
+                metric_name = f'risk_result_{lens}'
+                result = self.portfolio_graph.metric_store.get_metric(root_component_id, metric_name)
+                if result:
+                    results_found.append(lens)
+            
+            if results_found:
+                logger.info(f"Risk results stored successfully for {root_component_id}: {results_found}")
+            else:
+                logger.error(f"No risk results found for root component {root_component_id} after visitor execution")
+                
+                # Debug: Check what metrics ARE available
+                self._debug_available_metrics(root_component_id)
+                
+        except Exception as e:
+            logger.error(f"Error validating risk results storage: {e}")
+    
+    def _debug_available_metrics(self, component_id: str) -> None:
+        """
+        Debug helper to list all available metrics for a component.
+        
+        Args:
+            component_id: Component identifier
+        """
+        try:
+            if not self.portfolio_graph.metric_store:
+                logger.debug("No metric store available")
+                return
+            
+            # Try to get all metrics for this component (implementation depends on metric store)
+            # This is a debug helper, so we'll try different approaches
+            
+            if hasattr(self.portfolio_graph.metric_store, 'get_all_metrics'):
+                all_metrics = self.portfolio_graph.metric_store.get_all_metrics(component_id)
+                if all_metrics:
+                    logger.debug(f"Available metrics for {component_id}: {list(all_metrics.keys())}")
+                else:
+                    logger.debug(f"No metrics found for component: {component_id}")
+            else:
+                # Try common metric names
+                common_metrics = ['portfolio_weight', 'benchmark_weight', 'portfolio_return', 'benchmark_return']
+                available = []
+                for metric_name in common_metrics:
+                    metric = self.portfolio_graph.metric_store.get_metric(component_id, metric_name)
+                    if metric:
+                        available.append(metric_name)
+                
+                if available:
+                    logger.debug(f"Some available metrics for {component_id}: {available}")
+                else:
+                    logger.debug(f"No common metrics found for component: {component_id}")
+                    
+        except Exception as e:
+            logger.debug(f"Error in debug_available_metrics: {e}")
+    
+    def get_metric_store_summary(self) -> Dict[str, Any]:
+        """
+        Get summary of metric store contents for debugging.
+        
+        Returns:
+            Dictionary with metric store summary
+        """
+        summary = {
+            "metric_store_available": self.portfolio_graph.metric_store is not None,
+            "components_with_metrics": {},
+            "total_components": len(self.portfolio_graph.components)
+        }
+        
+        if not self.portfolio_graph.metric_store:
+            return summary
+        
+        try:
+            # Check each component for risk results
+            for component_id in self.portfolio_graph.components.keys():
+                component_metrics = {
+                    "risk_results": {},
+                    "other_metrics": []
+                }
+                
+                # Check for risk results
+                for lens in ['portfolio', 'benchmark', 'active']:
+                    metric_name = f'risk_result_{lens}'
+                    result = self.portfolio_graph.metric_store.get_metric(component_id, metric_name)
+                    component_metrics["risk_results"][lens] = result is not None
+                
+                # Check for other common metrics
+                common_metrics = ['portfolio_weight', 'benchmark_weight', 'portfolio_return', 'benchmark_return']
+                for metric_name in common_metrics:
+                    result = self.portfolio_graph.metric_store.get_metric(component_id, metric_name)
+                    if result:
+                        component_metrics["other_metrics"].append(metric_name)
+                
+                summary["components_with_metrics"][component_id] = component_metrics
+        
+        except Exception as e:
+            summary["error"] = f"Error analyzing metric store: {e}"
         
         return summary

@@ -195,22 +195,35 @@ class RiskAnalysisService:
     def _run_initial_analysis(self) -> bool:
         """Run initial risk analysis with current settings."""
         try:
+            # Comprehensive validation before attempting analysis
+            validation_result = self._validate_analysis_prerequisites()
+            if not validation_result['valid']:
+                logger.error(f"Analysis prerequisites not met: {validation_result['errors']}")
+                return False
+            
             if not self._current_risk_model:
                 logger.error("No current risk model for initial analysis")
                 return False
             
             # Get factor returns for current model
+            logger.info(f"Loading factor returns for model: {self._current_risk_model}")
             factor_returns = self.factor_provider.get_factor_returns_wide(self._current_risk_model)
             
             if factor_returns.empty:
                 logger.error("No factor returns data for initial analysis")
                 return False
             
+            logger.info(f"Loaded factor returns: {factor_returns.shape[0]} dates, {factor_returns.shape[1]} factors")
+            
             # Run risk computation
+            logger.info("Starting risk computation...")
             success = self.risk_computation.run_full_decomposition(factor_returns)
             
             if success:
                 logger.info("Initial risk analysis completed successfully")
+                
+                # Validate that results were actually stored
+                self._validate_risk_results()
                 return True
             else:
                 logger.error("Initial risk analysis failed")
@@ -218,6 +231,8 @@ class RiskAnalysisService:
                 
         except Exception as e:
             logger.error(f"Initial analysis failed: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return False
     
     def switch_risk_model(self, model_code: str) -> bool:
@@ -374,7 +389,7 @@ class RiskAnalysisService:
             return {"error": f"No risk results for {component_id}/{lens}"}
         
         # Format for UI consumption
-        return {
+        result_dict = {
             "component_id": component_id,
             "lens": lens,
             "total_risk": risk_result.total_risk,
@@ -387,8 +402,29 @@ class RiskAnalysisService:
             "factor_contributions": risk_result.factor_contributions,
             "asset_contributions": risk_result.asset_contributions,
             "factor_exposures": risk_result.factor_exposures,
-            "portfolio_weights": risk_result.portfolio_weights
+            "portfolio_weights": risk_result.portfolio_weights,
+            
+            # Matrix data for heatmaps (previously missing)
+            "weighted_betas": risk_result.weighted_betas or {},
+            "asset_by_factor_contributions": risk_result.asset_by_factor_contributions or {},
+            
+            # Asset name mapping for visualization
+            "asset_name_mapping": risk_result.asset_name_mapping or {}
         }
+        
+        # Log matrix data availability for debugging
+        has_weighted_betas = risk_result.weighted_betas is not None and len(risk_result.weighted_betas) > 0
+        has_asset_by_factor = risk_result.asset_by_factor_contributions is not None and len(risk_result.asset_by_factor_contributions) > 0
+        
+        logger.debug(f"Risk result for {component_id}/{lens}: weighted_betas={has_weighted_betas}, "
+                    f"asset_by_factor_contributions={has_asset_by_factor}")
+        
+        if not has_weighted_betas:
+            logger.warning(f"weighted_betas is empty for {component_id}/{lens}")
+        if not has_asset_by_factor:
+            logger.warning(f"asset_by_factor_contributions is empty for {component_id}/{lens}")
+        
+        return result_dict
     
     def get_all_components_risk(self, lens: str) -> Dict[str, Dict[str, Any]]:
         """
@@ -461,3 +497,123 @@ class RiskAnalysisService:
             summary["computation_summary"] = self.risk_computation.get_computation_summary()
         
         return summary
+    
+    def _validate_analysis_prerequisites(self) -> Dict[str, Any]:
+        """
+        Validate that all prerequisites for risk analysis are met.
+        
+        Returns:
+            Dictionary with validation results
+        """
+        validation = {
+            'valid': True,
+            'errors': [],
+            'warnings': []
+        }
+        
+        try:
+            # Check portfolio graph
+            if not self._portfolio_graph:
+                validation['errors'].append("PortfolioGraph not initialized")
+            else:
+                if not self._portfolio_graph.components:
+                    validation['errors'].append("PortfolioGraph has no components")
+                
+                if not self._portfolio_graph.root_id:
+                    validation['errors'].append("PortfolioGraph root_id not set")
+                elif self._portfolio_graph.root_id not in self._portfolio_graph.components:
+                    validation['errors'].append(f"Root component '{self._portfolio_graph.root_id}' not found in graph components")
+                    validation['errors'].append(f"Available components: {list(self._portfolio_graph.components.keys())}")
+                
+                if not self._portfolio_graph.metric_store:
+                    validation['errors'].append("PortfolioGraph metric store not available")
+            
+            # Check risk computation
+            if not self.risk_computation:
+                validation['errors'].append("RiskComputation not initialized")
+            
+            # Check data providers
+            if not self.factor_provider:
+                validation['errors'].append("FactorDataProvider not available")
+            
+            if not self.portfolio_provider:
+                validation['errors'].append("PortfolioDataProvider not available")
+            
+            # Check risk model
+            if not self._current_risk_model:
+                validation['errors'].append("No current risk model set")
+            
+            validation['valid'] = len(validation['errors']) == 0
+            
+        except Exception as e:
+            validation['errors'].append(f"Error during validation: {e}")
+            validation['valid'] = False
+        
+        return validation
+    
+    def _validate_risk_results(self) -> None:
+        """
+        Validate that risk results were properly generated and stored.
+        """
+        try:
+            if not self.risk_computation:
+                logger.warning("Cannot validate risk results: no risk computation available")
+                return
+            
+            # Get a summary of what was stored
+            metric_summary = self.risk_computation.get_metric_store_summary()
+            
+            # Check if the root component has risk results
+            root_id = self._portfolio_graph.root_id if self._portfolio_graph else None
+            
+            if root_id and root_id in metric_summary.get("components_with_metrics", {}):
+                root_metrics = metric_summary["components_with_metrics"][root_id]
+                risk_results = root_metrics.get("risk_results", {})
+                
+                has_portfolio = risk_results.get("portfolio", False)
+                has_benchmark = risk_results.get("benchmark", False) 
+                has_active = risk_results.get("active", False)
+                
+                logger.info(f"Risk results validation for {root_id}: portfolio={has_portfolio}, benchmark={has_benchmark}, active={has_active}")
+                
+                if not has_active:
+                    logger.warning(f"Missing active risk results for root component: {root_id}")
+                
+                if not (has_portfolio or has_benchmark):
+                    logger.error(f"Missing both portfolio and benchmark risk results for root component: {root_id}")
+            else:
+                logger.error(f"No risk results found for root component: {root_id}")
+                
+        except Exception as e:
+            logger.error(f"Error validating risk results: {e}")
+    
+    def get_detailed_status(self) -> Dict[str, Any]:
+        """
+        Get detailed service status for comprehensive debugging.
+        
+        Returns:
+            Dictionary with detailed status information
+        """
+        status = self.get_analysis_status()
+        
+        try:
+            # Add validation results
+            status['prerequisites'] = self._validate_analysis_prerequisites()
+            
+            # Add portfolio graph details
+            if self._portfolio_graph:
+                status['portfolio_graph'] = {
+                    'root_id': self._portfolio_graph.root_id,
+                    'components_count': len(self._portfolio_graph.components),
+                    'components_list': list(self._portfolio_graph.components.keys()),
+                    'metric_store_available': self._portfolio_graph.metric_store is not None
+                }
+            
+            # Add risk computation details
+            if self.risk_computation:
+                status['risk_computation'] = self.risk_computation.get_metric_store_summary()
+                
+        except Exception as e:
+            status['detailed_status_error'] = f"Error getting detailed status: {e}"
+        
+        return status
