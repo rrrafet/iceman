@@ -397,14 +397,12 @@ def create_asset_factor_contributions_heatmap(asset_by_factor_dict: Dict[str, Di
     
     # Convert nested dict to matrix format
     data_matrix, asset_names, factor_names = _convert_nested_dict_to_matrix(asset_by_factor_dict)
-    print(np.array(data_matrix).shape, asset_names, factor_names)
     
     if data_matrix is None:
         return go.Figure()
     
     # Convert to basis points for display
     data_matrix_bps = np.array(data_matrix) * 10000
-    print(data_matrix_bps)
     
     # Get display names using name mapping from risk data
     display_asset_names = _get_display_asset_names(asset_names, risk_data)

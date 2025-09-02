@@ -347,6 +347,103 @@ class DataAccessService:
             logger.error(f"Traceback: {traceback.format_exc()}")
             
             return self._get_empty_risk_decomposition_with_debug(component_id, lens, str(e))
+    
+    def get_allocation_selection_decomposition(self, component_id: str, lens: str) -> Dict[str, Any]:
+        """
+        Get comprehensive risk decomposition data specifically for allocation-selection analysis.
+        
+        This method returns ALL necessary fields from RiskResult that are needed for the
+        12-column Brinson-style allocation-selection table, including fields that are
+        missing from the general-purpose get_risk_decomposition method.
+        
+        Args:
+            component_id: Component identifier
+            lens: Risk lens ('portfolio', 'benchmark', 'active')
+            
+        Returns:
+            Dictionary with comprehensive risk decomposition data including:
+            - All basic risk metrics and weights
+            - Asset-level marginal contributions and factor/specific breakdowns
+            - Active risk allocation and selection components (when applicable)
+            - Metadata (analysis_type, annualized, frequency)
+        """
+        try:
+            if not self.risk_analysis_service.risk_computation:
+                return {"error": "Risk computation not available"}
+            
+            # Get the raw RiskResult object directly from computation
+            risk_result = self.risk_analysis_service.risk_computation.get_risk_result(component_id, lens)
+            
+            if not risk_result:
+                return {"error": f"No risk results for {component_id}/{lens}"}
+            
+            # Extract all necessary fields for allocation-selection analysis
+            result_dict = {
+                # Basic identifiers and metadata
+                "component_id": component_id,
+                "lens": lens,
+                "analysis_type": risk_result.analysis_type,
+                "annualized": risk_result.annualized,
+                "frequency": risk_result.frequency,
+                
+                # Core risk metrics
+                "total_risk": risk_result.total_risk,
+                "factor_risk_contribution": risk_result.factor_risk_contribution,
+                "specific_risk_contribution": risk_result.specific_risk_contribution,
+                "cross_correlation_risk_contribution": getattr(risk_result, 'cross_correlation_risk_contribution', 0.0),
+                
+                # Weights (all three types)
+                "portfolio_weights": risk_result.portfolio_weights or {},
+                "benchmark_weights": risk_result.benchmark_weights or {},
+                "active_weights": risk_result.active_weights or {},
+                
+                # Asset-level contributions (MISSING from get_risk_decomposition)
+                "marginal_contributions": risk_result.marginal_contributions or {},
+                "asset_contributions": risk_result.asset_contributions or {},
+                "asset_factor_contributions": risk_result.asset_factor_contributions or {},
+                "asset_specific_contributions": risk_result.asset_specific_contributions or {},
+                
+                # Active risk allocation and selection breakdowns (MISSING from get_risk_decomposition)
+                "asset_allocation_factor": risk_result.asset_allocation_factor or {},
+                "asset_allocation_specific": risk_result.asset_allocation_specific or {},
+                "asset_selection_factor": risk_result.asset_selection_factor or {},
+                "asset_selection_specific": risk_result.asset_selection_specific or {},
+                "asset_cross_correlation": risk_result.asset_cross_correlation or {},
+                
+                # Factor-level data
+                "factor_contributions": risk_result.factor_contributions or {},
+                "factor_exposures": risk_result.factor_exposures or {},
+                
+                # Asset name mapping for display
+                "asset_name_mapping": risk_result.asset_name_mapping or {},
+                
+                # Matrix data for heatmaps
+                "weighted_betas": risk_result.weighted_betas or {},
+                "asset_by_factor_contributions": risk_result.asset_by_factor_contributions or {},
+                
+                # Validation
+                "validation_passed": risk_result.validation_passed,
+                "validation_message": risk_result.validation_message
+            }
+            
+            logger.info(f"Retrieved comprehensive allocation-selection data for {component_id}/{lens}")
+            logger.debug(f"Analysis type: {risk_result.analysis_type}, "
+                        f"Assets: {len(risk_result.asset_contributions)}, "
+                        f"Has allocation data: {risk_result.asset_allocation_factor is not None}")
+            
+            return result_dict
+            
+        except Exception as e:
+            logger.error(f"Error getting allocation-selection decomposition for {component_id}/{lens}: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            
+            # Return error response
+            return {
+                "error": f"Failed to get allocation-selection data: {str(e)}",
+                "component_id": component_id,
+                "lens": lens
+            }
 
     def get_factor_exposure(self, component_id: str, lens: str) -> List[Tuple[str, float]]:
         """
@@ -945,3 +1042,272 @@ class DataAccessService:
             debug_info["traceback"] = traceback.format_exc()
         
         return debug_info
+    
+    def get_descendant_returns_data(self, component_id: str, lens: str = "portfolio") -> pd.DataFrame:
+        """
+        Get returns data for all descendant components of a given component.
+        
+        Args:
+            component_id: Component ID to get descendant returns for
+            lens: Type of returns ('portfolio', 'benchmark', 'active')
+            
+        Returns:
+            DataFrame with dates as index and component returns as columns
+        """
+        try:
+            descendant_ids = self.get_descendant_leaf_ids(component_id)
+            
+            if not descendant_ids:
+                return pd.DataFrame()
+            
+            returns_data = {}
+            
+            for desc_id in descendant_ids:
+                if lens == "portfolio":
+                    returns = self.get_portfolio_returns(desc_id)
+                elif lens == "benchmark":
+                    returns = self.get_benchmark_returns(desc_id)
+                elif lens == "active":
+                    returns = self.get_active_returns(desc_id)
+                else:
+                    continue
+                    
+                if not returns.empty:
+                    returns_data[desc_id] = returns
+            
+            if not returns_data:
+                return pd.DataFrame()
+            
+            # Combine all returns into a single DataFrame
+            combined_df = pd.DataFrame(returns_data)
+            return combined_df.dropna(how='all')
+            
+        except Exception as e:
+            logger.error(f"Error getting descendant returns data: {e}")
+            return pd.DataFrame()
+    
+    def get_factor_list(self) -> List[str]:
+        """
+        Get list of available factor names.
+        
+        Returns:
+            List of factor names
+        """
+        try:
+            current_model = self.risk_analysis_service.get_current_risk_model()
+            if not current_model:
+                return []
+            
+            factor_returns = self.factor_provider.get_factor_returns_wide(current_model)
+            if factor_returns.empty:
+                return []
+                
+            return list(factor_returns.columns)
+            
+        except Exception as e:
+            logger.error(f"Error getting factor list: {e}")
+            return []
+    
+    def get_factor_returns_data(self, factor_names: Optional[List[str]] = None) -> pd.DataFrame:
+        """
+        Get factor returns time series data.
+        
+        Args:
+            factor_names: List of factor names to retrieve. If None, gets all factors.
+            
+        Returns:
+            DataFrame with dates as index and factor returns as columns
+        """
+        try:
+            current_model = self.risk_analysis_service.get_current_risk_model()
+            if not current_model:
+                return pd.DataFrame()
+            
+            factor_returns = self.factor_provider.get_factor_returns_wide(current_model)
+            
+            if factor_returns.empty:
+                return pd.DataFrame()
+            
+            if factor_names:
+                # Filter to requested factors
+                available_factors = [f for f in factor_names if f in factor_returns.columns]
+                if available_factors:
+                    return factor_returns[available_factors].copy()
+                else:
+                    return pd.DataFrame()
+            else:
+                return factor_returns.copy()
+            
+        except Exception as e:
+            logger.error(f"Error getting factor returns data: {e}")
+            return pd.DataFrame()
+
+    def get_descendant_leaf_ids(self, component_id: str) -> List[str]:
+        """
+        Get all descendant leaf component IDs for a given component.
+        
+        Args:
+            component_id: Component ID to get descendants for
+            
+        Returns:
+            List of leaf component IDs that are descendants of the given component
+        """
+        try:
+            portfolio_graph = self.risk_analysis_service.get_portfolio_graph()
+            if not portfolio_graph:
+                logger.warning(f"Portfolio graph not available for descendant search")
+                return []
+            
+            def _collect_leaves(current_id: str) -> List[str]:
+                """Recursively collect leaf nodes."""
+                children = self.portfolio_provider.get_component_children(current_id)
+                
+                if not children:
+                    # This is a leaf node
+                    return [current_id]
+                
+                # Collect leaves from all children
+                all_leaves = []
+                for child_id in children:
+                    all_leaves.extend(_collect_leaves(child_id))
+                
+                return all_leaves
+            
+            leaf_ids = _collect_leaves(component_id)
+            logger.info(f"Found {len(leaf_ids)} descendant leaves for {component_id}")
+            return sorted(leaf_ids)
+            
+        except Exception as e:
+            logger.error(f"Error getting descendant leaf IDs for {component_id}: {e}")
+            return []
+    
+    def riskresult_to_brinson_table(self, risk_result: Dict[str, Any], leaf_ids: List[str]) -> pd.DataFrame:
+        """
+        Transform RiskResult data into Brinson-style allocation-selection table.
+        
+        Creates exactly 12 columns as specified in allocation-selection requirements:
+        1. asset_name, 2. portfolio_weight, 3. benchmark_weight, 4. asset marginal,
+        5. asset contribution to risk, 6. asset contribution to factor risk,
+        7. asset contribution to specific risk, 8. asset contribution to allocation factor risk,
+        9. asset contribution to allocation specific risk, 10. asset contribution to selection factor risk,
+        11. asset contribution to selection specific risk, 12. component_id
+        
+        Args:
+            risk_result: Risk decomposition data from get_risk_decomposition
+            leaf_ids: List of leaf component IDs to include in table
+            
+        Returns:
+            DataFrame with exactly 12 columns, one row per leaf asset
+        """
+        try:
+            if not risk_result or not leaf_ids:
+                # Return empty DataFrame with correct column structure
+                empty_df = pd.DataFrame(columns=[
+                    'asset_name', 'portfolio_weight', 'benchmark_weight', 'asset marginal',
+                    'asset contribution to risk', 'asset contribution to factor risk',
+                    'asset contribution to specific risk', 'asset contribution to allocation factor risk',
+                    'asset contribution to allocation specific risk', 'asset contribution to selection factor risk',
+                    'asset contribution to selection specific risk', 'component_id'
+                ])
+                return empty_df
+            
+            # Extract data from risk result
+            analysis_type = risk_result.get('analysis_type', 'portfolio')
+            asset_name_mapping = risk_result.get('asset_name_mapping', {})
+            portfolio_weights = risk_result.get('portfolio_weights', {})
+            benchmark_weights = risk_result.get('benchmark_weights', {})
+            marginal_contributions = risk_result.get('marginal_contributions', {})
+            asset_contributions = risk_result.get('asset_contributions', {})
+            
+            # Portfolio risk decomposition
+            asset_factor_contributions = risk_result.get('asset_factor_contributions', {})
+            asset_specific_contributions = risk_result.get('asset_specific_contributions', {})
+            
+            # Active risk decomposition (Brinson-style)
+            asset_allocation_factor = risk_result.get('asset_allocation_factor', {})
+            asset_allocation_specific = risk_result.get('asset_allocation_specific', {})
+            asset_selection_factor = risk_result.get('asset_selection_factor', {})
+            asset_selection_specific = risk_result.get('asset_selection_specific', {})
+            
+            # Build table data
+            table_data = []
+            
+            for component_id in leaf_ids:
+                # Basic identifiers
+                asset_name = asset_name_mapping.get(component_id, component_id) if asset_name_mapping else component_id
+                
+                # Weights
+                portfolio_weight = portfolio_weights.get(component_id, np.nan)
+                benchmark_weight = benchmark_weights.get(component_id, 0.0) if benchmark_weights else 0.0
+                
+                # Core risk metrics
+                asset_marginal = marginal_contributions.get(component_id, np.nan)
+                asset_contrib_to_risk = asset_contributions.get(component_id, np.nan)
+                
+                # Factor and specific risk contributions
+                if analysis_type == "active":
+                    # Active risk: combine allocation + selection for total factor/specific
+                    alloc_factor = asset_allocation_factor.get(component_id, 0.0) if asset_allocation_factor else 0.0
+                    alloc_specific = asset_allocation_specific.get(component_id, 0.0) if asset_allocation_specific else 0.0
+                    select_factor = asset_selection_factor.get(component_id, 0.0) if asset_selection_factor else 0.0
+                    select_specific = asset_selection_specific.get(component_id, 0.0) if asset_selection_specific else 0.0
+                    
+                    asset_contrib_to_factor = alloc_factor + select_factor
+                    asset_contrib_to_specific = alloc_specific + select_specific
+                    
+                    # Allocation/Selection components
+                    asset_contrib_alloc_factor = alloc_factor
+                    asset_contrib_alloc_specific = alloc_specific
+                    asset_contrib_select_factor = select_factor
+                    asset_contrib_select_specific = select_specific
+                    
+                else:
+                    # Portfolio risk: use asset_*_contributions, zero allocation/selection
+                    asset_contrib_to_factor = asset_factor_contributions.get(component_id, np.nan)
+                    asset_contrib_to_specific = asset_specific_contributions.get(component_id, np.nan)
+                    
+                    # No allocation/selection for portfolio lens
+                    asset_contrib_alloc_factor = 0.0
+                    asset_contrib_alloc_specific = 0.0
+                    asset_contrib_select_factor = 0.0
+                    asset_contrib_select_specific = 0.0
+                
+                # Build row
+                row = {
+                    'asset_name': asset_name,
+                    'portfolio_weight': portfolio_weight,
+                    'benchmark_weight': benchmark_weight,
+                    'asset marginal': asset_marginal,
+                    'asset contribution to risk': asset_contrib_to_risk,
+                    'asset contribution to factor risk': asset_contrib_to_factor,
+                    'asset contribution to specific risk': asset_contrib_to_specific,
+                    'asset contribution to allocation factor risk': asset_contrib_alloc_factor,
+                    'asset contribution to allocation specific risk': asset_contrib_alloc_specific,
+                    'asset contribution to selection factor risk': asset_contrib_select_factor,
+                    'asset contribution to selection specific risk': asset_contrib_select_specific,
+                    'component_id': component_id
+                }
+                
+                table_data.append(row)
+            
+            # Create DataFrame
+            df = pd.DataFrame(table_data)
+            
+            # Ensure deterministic ordering by sorting by asset_name
+            if not df.empty:
+                df = df.sort_values('asset_name').reset_index(drop=True)
+            
+            logger.info(f"Created Brinson table with {len(df)} rows and {len(df.columns)} columns")
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error creating Brinson table: {e}")
+            # Return empty DataFrame with correct structure
+            empty_df = pd.DataFrame(columns=[
+                'asset_name', 'portfolio_weight', 'benchmark_weight', 'asset marginal',
+                'asset contribution to risk', 'asset contribution to factor risk',
+                'asset contribution to specific risk', 'asset contribution to allocation factor risk',
+                'asset contribution to allocation specific risk', 'asset contribution to selection factor risk',
+                'asset contribution to selection specific risk', 'component_id'
+            ])
+            return empty_df

@@ -16,6 +16,8 @@ try:
     from .components.sidebar import render_sidebar
     from .components.tabs.overview import render_overview_tab
     from .components.tabs.risk_decomposition import render_risk_decomposition_tab
+    from .components.tabs.allocation_selection import render_allocation_selection_tab
+    from .components.tabs.data_explorer import render_data_explorer_tab
 except ImportError:
     # Fall back to absolute imports (when run standalone)
     from services.configuration_service import ConfigurationService
@@ -24,6 +26,8 @@ except ImportError:
     from components.sidebar import render_sidebar
     from components.tabs.overview import render_overview_tab
     from components.tabs.risk_decomposition import render_risk_decomposition_tab
+    from components.tabs.allocation_selection import render_allocation_selection_tab
+    from components.tabs.data_explorer import render_data_explorer_tab
 
 def initialize_services():
     """Initialize the 3-layer architecture services."""
@@ -129,6 +133,8 @@ def run():
     tab_names = [
         "Overview",
         "Risk Decomposition",
+        "Allocation-Selection",
+        "Data Explorer",
         # "Active Lens", 
         # "Hierarchy Explorer",
         # "Timeline",
@@ -151,6 +157,14 @@ def run():
     # Tab 2 - Risk Decomposition
     with tabs[1]:
         render_risk_decomposition_tab(data_access_service, sidebar_state)
+    
+    # Tab 3 - Allocation-Selection
+    with tabs[2]:
+        render_allocation_selection_tab(data_access_service, sidebar_state)
+    
+    # Tab 4 - Data Explorer
+    with tabs[3]:
+        render_data_explorer_tab(data_access_service, sidebar_state)
 
 
 def main():
