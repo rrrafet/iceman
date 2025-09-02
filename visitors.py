@@ -360,6 +360,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                     weights=np.array([1.0]),  # Full weight for individual asset risk
                     asset_names=[leaf.component_id],
                     factor_names=self.factor_names,
+                    asset_display_names=[leaf.name],
                     annualize=self.annualize
                 )
                 
@@ -369,6 +370,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                     weights=np.array([1.0]),  # Full weight for individual asset risk
                     asset_names=[leaf.component_id],
                     factor_names=self.factor_names,
+                    asset_display_names=[leaf.name],
                     annualize=self.annualize
                 )
                 
@@ -381,6 +383,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                     asset_names=[leaf.component_id],
                     factor_names=self.factor_names,
                     active_model=leaf_models['active'],
+                    asset_display_names=[leaf.name],
                     annualize=self.annualize
                 )
                 
@@ -431,11 +434,17 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                     ObjectMetric(model)
                 )
             
-            # Store asset names for schema extraction
+            # Store asset names and display names for schema extraction
             self.metric_store.set_metric(
                 leaf.component_id, 
                 'asset_names', 
                 ObjectMetric([leaf.component_id])
+            )
+            # Store display name for visualization
+            self.metric_store.set_metric(
+                leaf.component_id,
+                'asset_display_names',
+                ObjectMetric([leaf.name])
             )
         
         # Store weights and register with weight aggregator (preserve existing logic)
@@ -476,6 +485,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         
         # First visit all children and collect descendant leaves
         descendant_leaves = []
+        descendant_names = []  # Collect display names alongside IDs
         children_ids = node.get_all_children()
         self.logger.debug(f"Node {node.component_id} has {len(children_ids)} children: {children_ids}")
         
@@ -489,14 +499,18 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                 child_component.accept(self)
                 if child_component.is_leaf() and child_id in self._leaf_models:
                     descendant_leaves.append(child_id)
-                    self.logger.debug(f"Added leaf descendant: {child_id}")
+                    descendant_names.append(child_component.name)  # Collect display name
+                    self.logger.debug(f"Added leaf descendant: {child_id} (name: {child_component.name})")
                 elif not child_component.is_leaf() and child_id in self._node_risk_results:
                     # For child nodes, get their descendant leaves from stored asset names
                     if self.metric_store:
                         asset_names_metric = self.metric_store.get_metric(child_id, 'asset_names')
+                        asset_display_names_metric = self.metric_store.get_metric(child_id, 'asset_display_names')
                         if asset_names_metric:
                             child_descendants = asset_names_metric.value()
+                            child_names = asset_display_names_metric.value() if asset_display_names_metric else [name.split('/')[-1] for name in child_descendants]
                             descendant_leaves.extend(child_descendants)
+                            descendant_names.extend(child_names)
                             self.logger.debug(f"Added {len(child_descendants)} descendants from child node {child_id}")
         
         if not descendant_leaves:
@@ -518,12 +532,18 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
             self._weight_aggregator.set_node_weight(node.component_id, 'portfolio', node_portfolio_weight)
             self._weight_aggregator.set_node_weight(node.component_id, 'benchmark', node_benchmark_weight)
         
-        # Store descendant asset names for schema extraction
+        # Store descendant asset names and display names for schema extraction
         if self.metric_store:
             self.metric_store.set_metric(
                 node.component_id, 
                 'asset_names', 
                 ObjectMetric(descendant_leaves)
+            )
+            # Store display names for visualization
+            self.metric_store.set_metric(
+                node.component_id,
+                'asset_display_names',
+                ObjectMetric(descendant_names)
             )
         
         # Calculate effective weights using WeightPathAggregator
@@ -554,6 +574,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                     weights=portfolio_weights,
                     asset_names=descendant_leaves,
                     factor_names=self.factor_names,
+                    asset_display_names=descendant_names,
                     annualize=self.annualize
                 )
                 
@@ -563,6 +584,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                     weights=benchmark_weights,
                     asset_names=descendant_leaves,
                     factor_names=self.factor_names,
+                    asset_display_names=descendant_names,
                     annualize=self.annualize
                 )
                 
@@ -575,6 +597,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                     asset_names=descendant_leaves,
                     factor_names=self.factor_names,
                     active_model=node_models['active'],
+                    asset_display_names=descendant_names,
                     annualize=self.annualize
                 )
                 
