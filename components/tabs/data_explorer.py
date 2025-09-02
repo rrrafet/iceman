@@ -25,6 +25,7 @@ import os
 # Add parent directories for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
 from utils.formatters import format_percentage
+from utils.colors import get_discrete_color_sequence
 
 
 def render_data_explorer_tab(data_access_service, sidebar_state):
@@ -105,11 +106,12 @@ def render_descendant_returns_chart(data_access_service, component_id: str):
             plot_data = descendant_data
             y_label = "Periodic Returns"
         
-        # Create line chart
+        # Create line chart with consistent colors
         fig = px.line(
             plot_data,
             title=f"{lens_descendants.title()} Returns",
-            labels={"value": y_label, "date": "", "variable": ""}
+            labels={"value": y_label, "date": "", "variable": ""},
+            color_discrete_sequence=get_discrete_color_sequence()
         )
         
         # Format y-axis as percentages
@@ -186,11 +188,12 @@ def render_factor_returns_chart(data_access_service):
             plot_data = display_data
             y_label = "Periodic Returns"
         
-        # Create line chart
+        # Create line chart with consistent colors
         fig = px.line(
             plot_data,
             title=f"Factor Returns",
-            labels={"value": y_label, "date": "", "factor_name": ""}
+            labels={"value": y_label, "date": "", "factor_name": ""},
+            color_discrete_sequence=get_discrete_color_sequence()
         )
         
         # Format y-axis as percentages
@@ -385,7 +388,7 @@ def render_scatter_plot(data: pd.DataFrame, factor_name: str, lens: str, node_id
     node_ids : List[str]
         List of selected node IDs
     """
-    # Create scatter plot with marginal rugs
+    # Create scatter plot with marginal rugs and consistent colors
     fig = px.scatter(
         data,
         x='factor_return',
@@ -404,7 +407,8 @@ def render_scatter_plot(data: pd.DataFrame, factor_name: str, lens: str, node_id
         },
         marginal_x="rug",
         marginal_y="rug",
-        trendline="ols"
+        trendline="ols",
+        color_discrete_sequence=get_discrete_color_sequence()
     )
     
     # Format axes as percentages with 1 decimal

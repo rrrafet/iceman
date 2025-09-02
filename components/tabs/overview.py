@@ -1,6 +1,12 @@
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+import sys
+import os
+
+# Add parent directories for imports
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
+from utils.colors import get_chart_color
 
 def render_overview_tab(data_access_service, sidebar_state):
     """Render Tab 1 - Overview (snapshot) using 3-layer architecture services"""
@@ -48,8 +54,21 @@ def render_compound_returns_chart(data_access_service, sidebar_state):
         st.info("No time series data available for compound returns chart")
         return
     
-    # Plot the compound returns
+    # Plot the compound returns with proper colors
     fig = px.line(combined, title="", labels={'value': 'Cumulative Return', 'index': 'Date', 'variable': ''})
+    
+    # Apply consistent colors for Portfolio/Benchmark/Active
+    color_map = {
+        'Portfolio': get_chart_color('portfolio'),
+        'Benchmark': get_chart_color('benchmark'), 
+        'Active': get_chart_color('active')
+    }
+    
+    # Update trace colors
+    for trace in fig.data:
+        if trace.name in color_map:
+            trace.line.color = color_map[trace.name]
+    
     # axis format should be in percent with 1 decimal
     fig.update_yaxes(tickformat=".1%")
     st.plotly_chart(fig, use_container_width=True)

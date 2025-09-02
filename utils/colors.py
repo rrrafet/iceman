@@ -22,12 +22,6 @@ except ImportError:
         [0.5, COLOR_PALETTE["turquoise"]],
         [1.0, COLOR_PALETTE["red"]],
     ]
-    
-    PLOTLY_CONTINUOUS_COLORSCALE_BLUE_WHITE_RED = [
-        [0.0, COLOR_PALETTE["blue"]],
-        [0.5, "#ffffff"],
-        [1.0, COLOR_PALETTE["red"]],
-    ]
 
 # Create factor-specific color mapping
 FACTOR_COLORS = {

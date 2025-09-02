@@ -27,7 +27,7 @@ import os
 # Add parent directories for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
 from utils.formatters import format_basis_points, format_percentage, format_decimal, truncate_component_name, clean_factor_name
-from utils.colors import get_chart_color
+from utils.colors import get_chart_color, PLOTLY_CONTINUOUS_COLORSCALE
 
 def render_risk_decomposition_tab(data_access_service, sidebar_state):
     """
@@ -412,7 +412,7 @@ def create_asset_factor_contributions_heatmap(asset_by_factor_dict: Dict[str, Di
         z=data_matrix_bps,
         x=display_factor_names,
         y=display_asset_names,
-        colorscale="RdBu",
+        colorscale=PLOTLY_CONTINUOUS_COLORSCALE,
         zmid=0,
         hoverongaps=False,
         colorbar=dict(title="Risk Contribution (bps)"),
@@ -467,7 +467,7 @@ def create_weighted_betas_heatmap(weighted_betas_dict: Dict[str, Dict[str, float
         z=data_matrix,
         x=display_factor_names,
         y=display_asset_names,
-        colorscale="Viridis",
+        colorscale=PLOTLY_CONTINUOUS_COLORSCALE,
         hoverongaps=False,
         colorbar=dict(title="Weighted Beta"),
         hovertemplate='<b>Asset:</b> %{y}<br>' +
@@ -698,7 +698,7 @@ def create_risk_matrix_heatmap(data: List[List[float]], x_labels: List[str], y_l
         z=data_array,
         x=x_labels,
         y=y_labels,
-        colorscale=color_scale,
+        colorscale=PLOTLY_CONTINUOUS_COLORSCALE if color_scale == "RdBu" else color_scale,
         zmid=zmid,
         hoverongaps=False,
         colorbar=dict(title="Value")
