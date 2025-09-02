@@ -583,6 +583,14 @@ def analyze_active_risk(
         asset_cross_correlation = np.zeros_like(active_weights_array)
         asset_contributions = np.zeros_like(active_weights_array)
     
+    # Asset-level marginal contributions (MISSING from active risk analysis)
+    if total_active_risk > 0:
+        marginal_contributions = RiskCalculator.calculate_marginal_contributions(
+            active_model.covar, active_weights_array, total_active_risk
+        )
+    else:
+        marginal_contributions = np.zeros_like(active_weights_array)
+    
     # Create asset name mapping for visualization
     asset_name_mapping = None
     if asset_names and asset_display_names and len(asset_names) == len(asset_display_names):
@@ -648,6 +656,7 @@ def analyze_active_risk(
             factor_contributions=dict(zip(factor_names, annualized_factor_contrib)),
             asset_contributions=dict(zip(asset_names, annualized_asset_contrib)),
             factor_exposures=dict(zip(factor_names, active_exposures)),
+            marginal_contributions=dict(zip(asset_names, RiskAnnualizer.annualize_contributions(marginal_contributions, frequency))),
             
             # Portfolio weights
             portfolio_weights=dict(zip(asset_names, port_weights_array)),
@@ -699,6 +708,7 @@ def analyze_active_risk(
             factor_contributions=dict(zip(factor_names, factor_contributions)),
             asset_contributions=dict(zip(asset_names, asset_contributions)),
             factor_exposures=dict(zip(factor_names, active_exposures)),
+            marginal_contributions=dict(zip(asset_names, marginal_contributions)),
             
             # Portfolio weights
             portfolio_weights=dict(zip(asset_names, port_weights_array)),
