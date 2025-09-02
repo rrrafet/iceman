@@ -91,8 +91,8 @@ def run():
             st.session_state.data_access_service = data_access_service
             st.session_state.services_initialized = True
             
-            st.success(f"Loaded portfolio: {config_service.get_portfolio_name()}")
-            st.success(f"Loaded risk model: {config_service.get_default_risk_model()}")
+            #st.success(f"Loaded portfolio: {config_service.get_portfolio_name()}")
+            #st.success(f"Loaded risk model: {config_service.get_default_risk_model()}")
     
     # Get services from session state
     config_service = st.session_state.config_service
@@ -111,23 +111,23 @@ def run():
     with col1:
         # Portfolio info
         portfolio_name = config_service.get_portfolio_name()
-        st.markdown(f"**Portfolio:** {portfolio_name}")
+        st.markdown(f"**Graph:** {portfolio_name}")
         
         # Show current component path
         selected_component = sidebar_state.selected_component_id if hasattr(sidebar_state, 'selected_component_id') else config_service.get_root_component_id()
-        st.caption(f"Component: {selected_component}")
+        #st.caption(f"Component: {selected_component}")
     
     with col2:
         # Risk model and analysis status  
         current_risk_model = sidebar_state.selected_risk_model if hasattr(sidebar_state, 'selected_risk_model') else config_service.get_default_risk_model()
         st.markdown(f"**Risk Model:** {current_risk_model}")
-        st.caption("Risk Analysis: Ready")
+        #st.caption("Risk Analysis: Ready")
     
     with col3:
         lens = sidebar_state.lens if hasattr(sidebar_state, 'lens') else config_service.get_default_lens()
         st.markdown(f"**Lens:** {lens.title()}")
-        currency = config_service.get_currency()
-        st.info(currency)
+        #currency = config_service.get_currency()
+        #st.info(currency)
     
     # Tab navigation
     tab_names = [

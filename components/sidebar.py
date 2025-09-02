@@ -21,7 +21,7 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         # Current configuration display
         st.subheader("Configuration")
         portfolio_name = config_service.get_portfolio_name()
-        st.text(f"Portfolio: {portfolio_name}")
+        st.text(f"Graph: {portfolio_name}")
         
         st.divider()
         
@@ -89,34 +89,34 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             key="lens_selector"
         )
         
-        st.divider()
+        # st.divider()
         
         # Factor filter  
-        st.subheader("Factor Filter")
-        try:
-            factor_names = data_access_service.get_available_factors()
-        except:
-            factor_names = []
+        # st.subheader("Factor Filter")
+        # try:
+        #     factor_names = data_access_service.get_available_factors()
+        # except:
+        #     factor_names = []
         
-        selected_factors = st.multiselect(
-            "Select factors to analyze",
-            options=factor_names,
-            default=[],
-            key="factor_filter"
-        )
+        # selected_factors = st.multiselect(
+        #     "Select factors to analyze",
+        #     options=factor_names,
+        #     default=[],
+        #     key="factor_filter"
+        # )
         
-        st.divider()
+        # st.divider()
         
         # Display options
-        st.subheader("Display")
-        annualized = st.toggle("Annualized", value=config_service.get_annualized_default(), key="annualized_toggle")
-        show_percentage = st.toggle("Show % of total", value=True, key="percentage_toggle")
+        # st.subheader("Display")
+        # nnualized = st.toggle("Annualized", value=config_service.get_annualized_default(), key="annualized_toggle")
+        # show_percentage = st.toggle("Show % of total", value=True, key="percentage_toggle")
     
     return SidebarState(
         lens=lens,
         selected_component_id=selected_component_id,
         selected_risk_model=selected_risk_model,
-        selected_factors=selected_factors,
-        annualized=annualized,
-        show_percentage=show_percentage
+        selected_factors=None,
+        annualized=None,
+        show_percentage=None
     )

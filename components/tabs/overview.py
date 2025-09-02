@@ -5,16 +5,17 @@ import plotly.express as px
 def render_overview_tab(data_access_service, sidebar_state):
     """Render Tab 1 - Overview (snapshot) using 3-layer architecture services"""
     
-
     st.header(f"**Component:** {sidebar_state.selected_component_id}")
-    
-    # Compound returns time series chart
-    render_compound_returns_chart(data_access_service, sidebar_state)
-    
-    st.divider()
     
     # Risk composition - stacked bars for Portfolio, Benchmark, Active
     render_risk_composition(data_access_service, sidebar_state)
+
+    st.divider()
+    # Compound returns time series chart
+    render_compound_returns_chart(data_access_service, sidebar_state)
+    
+    
+
     
     
 

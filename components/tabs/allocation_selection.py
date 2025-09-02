@@ -58,7 +58,7 @@ def render_allocation_selection_tab(data_access_service, sidebar_state):
         return
     
     # Render header with component info and badges
-    render_header_badges(component_id, risk_data, len(leaf_ids))
+    # render_header_badges(component_id, risk_data, len(leaf_ids))
     
     # Create Brinson analysis table
     brinson_df = data_access_service.riskresult_to_brinson_table(risk_data, leaf_ids)
@@ -171,14 +171,14 @@ def render_brinson_analysis_table(df: pd.DataFrame, risk_data: Dict[str, Any]):
     risk_data : Dict[str, Any]
         Risk decomposition data for context
     """
-    st.subheader(f"Asset-Level Analysis ({len(df)} Assets)")
+    #st.subheader(f"Asset-Level Analysis")
     
     # Show analysis type context
     analysis_type = risk_data.get('analysis_type', 'portfolio')
-    if analysis_type == "active":
-        st.info("🎯 **Active Risk Analysis**: Allocation and Selection columns show Brinson-style risk decomposition")
-    else:
-        st.info("📊 **Portfolio Risk Analysis**: Allocation and Selection columns are zero (portfolio-only lens)")
+    # if analysis_type == "active":
+    #     st.info("🎯 **Active Risk Analysis**: Allocation and Selection columns show Brinson-style risk decomposition")
+    # else:
+    #     st.info("📊 **Portfolio Risk Analysis**: Allocation and Selection columns are zero (portfolio-only lens)")
     
     # Configure column formatting for display
     formatted_df = format_table_for_display(df)

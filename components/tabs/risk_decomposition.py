@@ -52,8 +52,8 @@ def render_risk_decomposition_tab(data_access_service, sidebar_state):
     risk_data = data_access_service.get_risk_decomposition(sidebar_state.selected_component_id, sidebar_state.lens)
 
     # Debug: Show available risk data fields for development
-    if st.checkbox("Show debug info (available risk data fields)"):
-        st.json({k: type(v).__name__ for k, v in risk_data.items() if risk_data})
+    # if st.checkbox("Show debug info (available risk data fields)"):
+    #    st.json({k: type(v).__name__ for k, v in risk_data.items() if risk_data})
     
     #if not risk_data:
         #st.warning(f"Risk decomposition data not available for {sidebar_state.selected_component_id} ({sidebar_state.lens} lens)")
@@ -89,7 +89,7 @@ def render_risk_summary_kpis(risk_data: Dict[str, Any]):
     risk_data : Dict[str, Any]
         Risk data extracted from schema
     """
-    st.subheader("Risk Summary")
+    # st.subheader("Risk Summary")
     
     # Extract risk metrics
     total_risk = risk_data.get('total_risk', 0)
@@ -165,11 +165,11 @@ def render_risk_summary_kpis(risk_data: Dict[str, Any]):
             )
         
         # Portfolio validation check
-        sum_contributions = factor_risk_contrib + specific_risk_contrib
-        if abs(sum_contributions - total_risk) > 1e-6:
-            st.warning(f"Risk decomposition validation: Factor + Idiosyncratic ({format_basis_points(sum_contributions)}) ≠ Total ({format_basis_points(total_risk)})")
-        else:
-            st.success("✓ Euler identity validated: All risk contributions sum to total risk")
+        # sum_contributions = factor_risk_contrib + specific_risk_contrib
+        # if abs(sum_contributions - total_risk) > 1e-6:
+        #     st.warning(f"Risk decomposition validation: Factor + Idiosyncratic ({format_basis_points(sum_contributions)}) ≠ Total ({format_basis_points(total_risk)})")
+        # else:
+        #     st.success("✓ Euler identity validated: All risk contributions sum to total risk")
 
 
 
@@ -201,7 +201,7 @@ def render_factor_analysis_charts(risk_data: Dict[str, Any]):
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("**Factor Risk Contributions**")
+        # st.markdown("**Factor Risk Contributions**")
         if factor_contributions:
             contributions_chart = create_factor_contributions_chart(factor_contributions)
             st.plotly_chart(contributions_chart, use_container_width=True)
@@ -209,7 +209,7 @@ def render_factor_analysis_charts(risk_data: Dict[str, Any]):
             st.info("Factor contributions data not available")
     
     with col2:
-        st.markdown("**Factor Exposures**")
+        # st.markdown("**Factor Exposures**")
         if factor_exposures:
             exposures_chart = create_factor_exposures_chart(factor_exposures)
             st.plotly_chart(exposures_chart, use_container_width=True)
@@ -346,7 +346,7 @@ def render_risk_matrices(risk_data: Dict[str, Any]):
     risk_data : Dict[str, Any]
         Risk data containing weighted_betas and asset_by_factor_contributions matrices
     """
-    st.subheader("Risk Matrix Analysis")
+    # st.subheader("Risk Matrix Analysis")
     
     # Extract matrix data
     weighted_betas = risk_data.get('weighted_betas', {})
@@ -360,7 +360,7 @@ def render_risk_matrices(risk_data: Dict[str, Any]):
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("**Asset-Factor Risk Contributions Matrix**")
+        # st.markdown("**Asset-Factor Risk Contributions Matrix**")
         if asset_by_factor_contributions:
             contributions_heatmap = create_asset_factor_contributions_heatmap(asset_by_factor_contributions, risk_data)
             st.plotly_chart(contributions_heatmap, use_container_width=True)
@@ -368,7 +368,7 @@ def render_risk_matrices(risk_data: Dict[str, Any]):
             st.info("Asset-factor contributions matrix not available")
     
     with col2:
-        st.markdown("**Weighted Beta Matrix**")
+        # st.markdown("**Weighted Beta Matrix**")
         if weighted_betas:
             weighted_betas_heatmap = create_weighted_betas_heatmap(weighted_betas, risk_data)
             st.plotly_chart(weighted_betas_heatmap, use_container_width=True)

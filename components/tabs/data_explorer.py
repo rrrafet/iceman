@@ -108,8 +108,8 @@ def render_descendant_returns_chart(data_access_service, component_id: str):
         # Create line chart
         fig = px.line(
             plot_data,
-            title=f"{lens_descendants.title()} Returns - {len(plot_data.columns)} Components",
-            labels={"value": y_label, "index": "Date"}
+            title=f"{lens_descendants.title()} Returns",
+            labels={"value": y_label, "date": "", "variable": ""}
         )
         
         # Format y-axis as percentages
@@ -189,8 +189,8 @@ def render_factor_returns_chart(data_access_service):
         # Create line chart
         fig = px.line(
             plot_data,
-            title=f"Factor Returns - {len(selected_factors)} Factors",
-            labels={"value": y_label, "index": "Date"}
+            title=f"Factor Returns",
+            labels={"value": y_label, "date": "", "factor_name": ""}
         )
         
         # Format y-axis as percentages
@@ -394,7 +394,8 @@ def render_scatter_plot(data: pd.DataFrame, factor_name: str, lens: str, node_id
         title=f"{lens.title()} Returns vs {factor_name}",
         labels={
             'factor_return': f'{factor_name} Returns',
-            'node_return': f'{lens.title()} Returns'
+            'node_return': f'{lens.title()} Returns',
+            "node_id": ""
         },
         hover_data={
             'date': True,
@@ -402,7 +403,8 @@ def render_scatter_plot(data: pd.DataFrame, factor_name: str, lens: str, node_id
             'node_return': ':.1%'
         },
         marginal_x="rug",
-        marginal_y="rug"
+        marginal_y="rug",
+        trendline="ols"
     )
     
     # Format axes as percentages with 1 decimal
@@ -410,30 +412,6 @@ def render_scatter_plot(data: pd.DataFrame, factor_name: str, lens: str, node_id
         xaxis=dict(tickformat=".1%"),
         yaxis=dict(tickformat=".1%")
     )
-    
-    # Add trend line if multiple points
-    if len(data) > 10:
-        # Add trend line for each node
-        for node_id in data['node_id'].unique():
-            node_data = data[data['node_id'] == node_id]
-            if len(node_data) > 5:  # Only add trend line if enough points
-                z = np.polyfit(node_data['factor_return'], node_data['node_return'], 1)
-                p = np.poly1d(z)
-                
-                x_trend = np.linspace(node_data['factor_return'].min(), node_data['factor_return'].max(), 100)
-                y_trend = p(x_trend)
-                
-                fig.add_trace(
-                    go.Scatter(
-                        x=x_trend,
-                        y=y_trend,
-                        mode='lines',
-                        name=f'{node_id} trend',
-                        line=dict(dash='dash'),
-                        opacity=0.7,
-                        showlegend=False
-                    )
-                )
     
     # Improve layout
     fig.update_layout(
