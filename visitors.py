@@ -10,7 +10,6 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Set, Tuple, Any, TYPE_CHECKING
 import numpy as np
 import pandas as pd
-from statsmodels.stats.correlation_tools import cov_nearest
 import logging
 import time
 
@@ -25,6 +24,16 @@ if TYPE_CHECKING:
     from .components import PortfolioComponent, PortfolioLeaf, PortfolioNode
     from .metrics import WeightCalculationService
     from spark.risk.schema import RiskResultSchema
+    from spark.risk.risk_analysis import RiskResult
+
+# Import simplified risk analysis functions
+try:
+    from spark.risk.risk_analysis import analyze_portfolio_risk, analyze_active_risk, RiskResult
+except ImportError:
+    # Fallback if risk_analysis module is not available
+    analyze_portfolio_risk = None
+    analyze_active_risk = None
+    RiskResult = None
 
 
 
@@ -268,9 +277,6 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         self.logger.info(f"Portfolio metrics: returns={portfolio_returns_metric}, weights={portfolio_weight_metric}")
         self.logger.info(f"Benchmark metrics: returns={benchmark_returns_metric}, weights={benchmark_weight_metric}")
         
-        # Internal storage for processing
-        self._leaf_models: Dict[str, Dict[str, 'LinearRiskModel']] = {}
-        
         # Initialize WeightPathAggregator for hierarchical weight calculations
         self._weight_service = weight_service
         if weight_service is not None:
@@ -282,16 +288,20 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
             self._use_service = False
             self.logger.info("Using manual WeightPathAggregator (fallback mode)")
         
-        # Hierarchical weight storage
+        # Simplified storage structure
+        self._leaf_models: Dict[str, Dict[str, Any]] = {}  # leaf_id -> {'portfolio': model, 'benchmark': model, 'active': model}
+        self._node_models: Dict[str, Dict[str, Any]] = {}  # node_id -> {'portfolio': model, 'benchmark': model, 'active': model}
+        self._node_risk_results: Dict[str, Dict[str, Any]] = {}  # node_id -> {'portfolio': RiskResult, 'benchmark': RiskResult, 'active': RiskResult}
+        
+        # Keep weight aggregator for hierarchical weight calculations (this is working well)
         self._node_weights: Dict[str, Dict[str, float]] = {}  # Each node's own weights
         self._node_contribution_weights: Dict[Tuple[str, str], Dict[str, float]] = {}  # (node_id, leaf_id) -> weights
         self._descendant_weights: Dict[str, Dict[str, np.ndarray]] = {}  # Effective weights for risk calculation
         
-        self._unified_matrices: Dict[str, Dict[str, Dict[str, np.ndarray]]] = {}
         self._processed_components: Set[str] = set()
     
     def visit_leaf(self, leaf: 'PortfolioLeaf') -> None:
-        """Visit leaf and estimate factor exposures via OLS regression"""
+        """Visit leaf and estimate factor models, calculate risk using simplified API"""
         start_time = time.time()
         self.logger.debug(f"Visiting leaf: {leaf.component_id}")
         
@@ -306,16 +316,13 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         
         if portfolio_returns is None or benchmark_returns is None:
             self.logger.error(f"Missing returns data for leaf {leaf.component_id}")
-            raise ValueError(f"Missing returns data for leaf {leaf.component_id}. Ensure metrics are set in the metric store.")        
-        
-        self.logger.debug(f"Portfolio returns shape: {portfolio_returns.shape if hasattr(portfolio_returns, 'shape') else len(portfolio_returns)}")
-        self.logger.debug(f"Benchmark returns shape: {benchmark_returns.shape if hasattr(benchmark_returns, 'shape') else len(benchmark_returns)}")
+            raise ValueError(f"Missing returns data for leaf {leaf.component_id}. Ensure metrics are set in the metric store.")
         
         # Calculate active returns
         active_returns = portfolio_returns - benchmark_returns
         self.logger.debug(f"Calculated active returns for {leaf.component_id}, mean: {np.mean(active_returns):.6f}, std: {np.std(active_returns):.6f}")
         
-        # Estimate factor models for all three return types
+        # Estimate factor models for all three return types (keep current approach for individual leaves)
         self.logger.info(f"Estimating factor models for leaf {leaf.component_id}")
         leaf_models = {}
         for return_type, returns_data in [
@@ -325,74 +332,127 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         ]:
             try:
                 fit_start_time = time.time()
-                self.logger.debug(f"Fitting {return_type} model for {leaf.component_id}")
                 model = self.estimator.fit(
                     asset_returns=pd.DataFrame({leaf.component_id: returns_data}),
                     factor_returns=self.factor_returns
                 )
                 fit_time = time.time() - fit_start_time
                 leaf_models[return_type] = model
-                self.logger.debug(f"Successfully fitted {return_type} model for {leaf.component_id} in {fit_time:.3f}s")
-                if fit_time > 0.5:  # Warn about slow model fitting
-                    self.logger.warning(f"Slow model fitting: {return_type} for {leaf.component_id} took {fit_time:.3f}s")
+                self.logger.debug(f"Fitted {return_type} model for {leaf.component_id} in {fit_time:.3f}s")
             except Exception as e:
                 self.logger.error(f"Failed to estimate {return_type} risk model for {leaf.component_id}: {str(e)}")
-                raise ValueError(
-                    f"Failed to estimate risk model for {leaf.component_id} with return type {return_type}"
-                )   
+                raise ValueError(f"Failed to estimate risk model for {leaf.component_id} with return type {return_type}")
         
-        # Store models for this leaf
-        if leaf_models:
-            self._leaf_models[leaf.component_id] = leaf_models
-            self.logger.info(f"Stored {len(leaf_models)} risk models for leaf {leaf.component_id}")
-            
-            # Log detailed risk model information
-            for return_type, model in leaf_models.items():
-                self._log_risk_model_details(model, leaf.component_id, return_type)
-            
-            # Store individual risk models in metric store
-            if self.metric_store:
-                for return_type, model in leaf_models.items():
+        # Store models for later use in node aggregation
+        self._leaf_models[leaf.component_id] = leaf_models
+        self.logger.info(f"Stored {len(leaf_models)} risk models for leaf {leaf.component_id}")
+        
+        # Get leaf weights
+        portfolio_weight = self._get_component_weight(leaf, 'portfolio_weight')
+        benchmark_weight = self._get_component_weight(leaf, 'benchmark_weight')
+        
+        # Calculate leaf-level risk using analyze_portfolio_risk() directly
+        if analyze_portfolio_risk is not None:
+            try:
+                # Portfolio risk analysis - for leaf, use weight=1.0 (full asset risk)
+                portfolio_result = analyze_portfolio_risk(
+                    model=leaf_models['portfolio'],
+                    weights=np.array([1.0]),  # Full weight for individual asset risk
+                    asset_names=[leaf.component_id],
+                    factor_names=self.factor_names,
+                    asset_display_names=[leaf.name],
+                    annualize=self.annualize
+                )
+                
+                # Benchmark risk analysis - for leaf, use weight=1.0 (full asset risk)
+                benchmark_result = analyze_portfolio_risk(
+                    model=leaf_models['benchmark'],
+                    weights=np.array([1.0]),  # Full weight for individual asset risk
+                    asset_names=[leaf.component_id],
+                    factor_names=self.factor_names,
+                    asset_display_names=[leaf.name],
+                    annualize=self.annualize
+                )
+                
+                # Active risk analysis - for leaf, use weight=1.0 (full asset risk)
+                active_result = analyze_active_risk(
+                    portfolio_model=leaf_models['portfolio'],
+                    benchmark_model=leaf_models['benchmark'],
+                    portfolio_weights=np.array([1.0]),  # Full weight for individual asset risk
+                    benchmark_weights=np.array([1.0]),  # Full weight for individual asset risk
+                    asset_names=[leaf.component_id],
+                    factor_names=self.factor_names,
+                    active_model=leaf_models['active'],
+                    asset_display_names=[leaf.name],
+                    annualize=self.annualize
+                )
+                
+                # Store RiskResult objects
+                self._node_risk_results[leaf.component_id] = {
+                    'portfolio': portfolio_result,
+                    'benchmark': benchmark_result,
+                    'active': active_result
+                }
+
+                self.logger.info(f"Calculated risks for {leaf.component_id}: "
+                               f"portfolio={portfolio_result.total_risk:.4f}, "
+                               f"benchmark={benchmark_result.total_risk:.4f}, "
+                               f"active={active_result.total_risk:.4f}")
+                
+                # Store RiskResult objects in metric store with correct naming convention
+                if self.metric_store:
                     self.metric_store.set_metric(
-                        leaf.component_id, 
-                        f'{return_type}_risk_model', 
-                        ObjectMetric(model)
+                        leaf.component_id,
+                        'risk_result_portfolio',
+                        ObjectMetric(portfolio_result)
                     )
-                self.logger.debug(f"Stored risk models in metric store for {leaf.component_id}")
+                    self.metric_store.set_metric(
+                        leaf.component_id,
+                        'risk_result_benchmark',
+                        ObjectMetric(benchmark_result)
+                    )
+                    self.metric_store.set_metric(
+                        leaf.component_id,
+                        'risk_result_active',
+                        ObjectMetric(active_result)
+                    )
+                    
+                    # Validate storage consistency between instance vars and metric store
+                    validation_result = self.validate_storage_consistency(leaf.component_id)
+                    if not validation_result['consistent']:
+                        self.logger.warning(f"Storage inconsistency detected for leaf {leaf.component_id}")
+                
+            except Exception as e:
+                self.logger.warning(f"Failed to calculate simplified risk analysis for {leaf.component_id}: {e}")
         
-        # Store this leaf as its own asset name for simplified schema extraction
+        # Store individual risk models in metric store (for backward compatibility)
         if self.metric_store:
+            for return_type, model in leaf_models.items():
+                self.metric_store.set_metric(
+                    leaf.component_id, 
+                    f'{return_type}_risk_model', 
+                    ObjectMetric(model)
+                )
+            
+            # Store asset names and display names for schema extraction
             self.metric_store.set_metric(
                 leaf.component_id, 
                 'asset_names', 
                 ObjectMetric([leaf.component_id])
             )
-            self.logger.debug(f"Stored asset names for leaf {leaf.component_id}")
+            # Store display name for visualization
+            self.metric_store.set_metric(
+                leaf.component_id,
+                'asset_display_names',
+                ObjectMetric([leaf.name])
+            )
         
-        # Store leaf's own weights and register with weight aggregator
-        portfolio_weight = self._get_component_weight(leaf, 'portfolio_weight')
-        benchmark_weight = self._get_component_weight(leaf, 'benchmark_weight')
-        active_weight = portfolio_weight - benchmark_weight
-        
-        self.logger.info(f"Leaf {leaf.component_id} weights: portfolio={portfolio_weight:.6f}, benchmark={benchmark_weight:.6f}, active={active_weight:.6f}")
-        
-        # Detailed weight analysis
-        weights_dict = {
-            'portfolio': np.array([portfolio_weight]),
-            'benchmark': np.array([benchmark_weight]), 
-            'active': np.array([active_weight])
-        }
-        
-        for return_type, weight_array in weights_dict.items():
-            self._log_weight_analysis(weight_array, leaf.component_id, return_type, [leaf.component_id])
-        
-        # Store weights for the leaf node
+        # Store weights and register with weight aggregator (preserve existing logic)
         self._node_weights[leaf.component_id] = {
             'portfolio': portfolio_weight,
             'benchmark': benchmark_weight,
         }
         
-        # Register with weight aggregator (only if not using service)
         if not self._use_service:
             self._weight_aggregator.set_node_weight(leaf.component_id, 'portfolio', portfolio_weight)
             self._weight_aggregator.set_node_weight(leaf.component_id, 'benchmark', benchmark_weight)
@@ -406,15 +466,16 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         
         self._processed_components.add(leaf.component_id)
         
-        # Log timing information
-        end_time = time.time()
-        processing_time = end_time - start_time
-        self.logger.info(f"Completed leaf {leaf.component_id} processing in {processing_time:.3f} seconds")
-        if processing_time > 1.0:  # Log warning for slow processing
-            self.logger.warning(f"Slow leaf processing detected: {leaf.component_id} took {processing_time:.3f} seconds")
+        processing_time = time.time() - start_time
+        self.logger.info(f"Completed simplified leaf {leaf.component_id} processing in {processing_time:.3f} seconds")
     
     def visit_node(self, node: 'PortfolioNode') -> None:
-        """Visit node and build unified matrices from descendant data"""
+        """
+        Visit node and calculate risk using correct model re-estimation approach.
+        
+        CRITICAL: Re-estimates models with ALL descendant leaves together to capture cross-correlations.
+        This is mathematically required for accurate risk decomposition.
+        """
         start_time = time.time()
         self.logger.debug(f"Visiting node: {node.component_id}")
         
@@ -422,106 +483,463 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
             self.logger.debug(f"Node {node.component_id} already processed, skipping")
             return
         
-        # First visit all children and register hierarchy relationships
+        # First visit all children and collect descendant leaves
         descendant_leaves = []
+        descendant_names = []  # Collect display names alongside IDs
         children_ids = node.get_all_children()
         self.logger.debug(f"Node {node.component_id} has {len(children_ids)} children: {children_ids}")
         
         for child_id in children_ids:
-            # Register parent-child relationship with weight aggregator (only if not using service)
+            # Register parent-child relationship with weight aggregator 
             if not self._use_service:
                 self._weight_aggregator.add_node_relationship(node.component_id, child_id)
-                self.logger.debug(f"Registered relationship: {node.component_id} -> {child_id}")
             
             child_component = node._get_child_component(child_id)
             if child_component:
                 child_component.accept(self)
                 if child_component.is_leaf() and child_id in self._leaf_models:
                     descendant_leaves.append(child_id)
-                    self.logger.debug(f"Added leaf descendant: {child_id}")
-                elif not child_component.is_leaf() and child_id in self._unified_matrices:
-                    # For child nodes, get their descendant leaves
-                    child_descendants = self._unified_matrices[child_id]['portfolio']['descendant_leaves']
-                    descendant_leaves.extend(child_descendants)
-                    self.logger.debug(f"Added {len(child_descendants)} descendants from child node {child_id}")
+                    descendant_names.append(child_component.name)  # Collect display name
+                    self.logger.debug(f"Added leaf descendant: {child_id} (name: {child_component.name})")
+                elif not child_component.is_leaf() and child_id in self._node_risk_results:
+                    # For child nodes, get their descendant leaves from stored asset names
+                    if self.metric_store:
+                        asset_names_metric = self.metric_store.get_metric(child_id, 'asset_names')
+                        asset_display_names_metric = self.metric_store.get_metric(child_id, 'asset_display_names')
+                        if asset_names_metric:
+                            child_descendants = asset_names_metric.value()
+                            child_names = asset_display_names_metric.value() if asset_display_names_metric else [name.split('/')[-1] for name in child_descendants]
+                            descendant_leaves.extend(child_descendants)
+                            descendant_names.extend(child_names)
+                            self.logger.debug(f"Added {len(child_descendants)} descendants from child node {child_id}")
         
         if not descendant_leaves:
             self.logger.warning(f"Node {node.component_id} has no descendant leaves with risk models")
             return
             
         self.logger.info(f"Processing node {node.component_id} with {len(descendant_leaves)} descendant leaves: {descendant_leaves}")
-            
-        # Store node's own weights and register with weight aggregator
+        
+        # Store node weights and register with weight aggregator
         node_portfolio_weight = self._get_component_weight(node, 'portfolio_weight')
         node_benchmark_weight = self._get_component_weight(node, 'benchmark_weight')
-        self.logger.debug(f"Node {node.component_id} weights: portfolio={node_portfolio_weight}, benchmark={node_benchmark_weight}")
         
         self._node_weights[node.component_id] = {
             'portfolio': node_portfolio_weight,
             'benchmark': node_benchmark_weight
         }
         
-        # Register node weights with aggregator (only if not using service)
         if not self._use_service:
             self._weight_aggregator.set_node_weight(node.component_id, 'portfolio', node_portfolio_weight)
             self._weight_aggregator.set_node_weight(node.component_id, 'benchmark', node_benchmark_weight)
         
-        # Store descendant asset names for this component for simplified schema extraction
-        if descendant_leaves and self.metric_store:
+        # Store descendant asset names and display names for schema extraction
+        if self.metric_store:
             self.metric_store.set_metric(
                 node.component_id, 
                 'asset_names', 
                 ObjectMetric(descendant_leaves)
             )
-            self.logger.debug(f"Stored {len(descendant_leaves)} asset names for node {node.component_id}")
+            # Store display names for visualization
+            self.metric_store.set_metric(
+                node.component_id,
+                'asset_display_names',
+                ObjectMetric(descendant_names)
+            )
         
-        # Calculate effective weights for descendants using weight aggregator
-        self.logger.debug(f"Calculating effective weights for node {node.component_id}")
+        # Calculate effective weights using WeightPathAggregator
         self._calculate_effective_weights(node, descendant_leaves)
         
-        # Build unified matrices
-        self.logger.info(f"Building unified matrices for node {node.component_id}")
-        unified_matrices = self._build_unified_node_matrices(node, descendant_leaves)
+        # CRITICAL: Re-estimate models with ALL descendant leaves together to capture cross-correlations
+        self.logger.info(f"Re-estimating models for node {node.component_id} with combined leaf data")
+        node_models = self._re_estimate_combined_models(node.component_id, descendant_leaves)
         
-        if unified_matrices:
-            self._unified_matrices[node.component_id] = unified_matrices
-            self.logger.info(f"Successfully built unified matrices for node {node.component_id}")
+        if node_models is None:
+            self.logger.error(f"Failed to re-estimate models for node {node.component_id}")
+            return
+        
+        # Get effective weights for risk calculation
+        if node.component_id not in self._descendant_weights:
+            self.logger.error(f"No effective weights calculated for node {node.component_id}")
+            return
             
-            # Log matrix dimensions for debugging
-            for matrix_type in ['portfolio', 'benchmark', 'active']:
-                if matrix_type in unified_matrices:
-                    matrices = unified_matrices[matrix_type]
-                    beta_shape = matrices.get('beta', np.array([])).shape
-                    weights_shape = matrices.get('weights', np.array([])).shape
-                    self.logger.debug(f"Node {node.component_id} {matrix_type} matrices: beta{beta_shape}, weights{weights_shape}")
-            
-            # Store hierarchical model context in metric store
-            if self.metric_store:
-                from spark.risk.context import create_hierarchical_risk_context
-                hierarchical_context = create_hierarchical_risk_context(unified_matrices, self.annualize)
-                
-                # Log comprehensive risk decomposition summary
-                self._log_decomposition_summary(hierarchical_context, node.component_id)
-                
-                self.metric_store.set_metric(
-                    node.component_id,
-                    'hierarchical_model_context',
-                    ObjectMetric(hierarchical_context)
+        portfolio_weights = self._descendant_weights[node.component_id]['portfolio']
+        benchmark_weights = self._descendant_weights[node.component_id]['benchmark']
+        
+        # Calculate risk using simplified analyze_active_risk() API
+        if analyze_active_risk is not None:
+            try:
+                # Portfolio risk analysis
+                portfolio_result = analyze_portfolio_risk(
+                    model=node_models['portfolio'],
+                    weights=portfolio_weights,
+                    asset_names=descendant_leaves,
+                    factor_names=self.factor_names,
+                    asset_display_names=descendant_names,
+                    annualize=self.annualize
                 )
-                self.logger.debug(f"Stored hierarchical model context for node {node.component_id}")
-        else:
-            self.logger.warning(f"Failed to build unified matrices for node {node.component_id}")
+                
+                # Benchmark risk analysis
+                benchmark_result = analyze_portfolio_risk(
+                    model=node_models['benchmark'],
+                    weights=benchmark_weights,
+                    asset_names=descendant_leaves,
+                    factor_names=self.factor_names,
+                    asset_display_names=descendant_names,
+                    annualize=self.annualize
+                )
+                
+                # Active risk analysis with properly estimated models
+                active_result = analyze_active_risk(
+                    portfolio_model=node_models['portfolio'],
+                    benchmark_model=node_models['benchmark'],
+                    portfolio_weights=portfolio_weights,
+                    benchmark_weights=benchmark_weights,
+                    asset_names=descendant_leaves,
+                    factor_names=self.factor_names,
+                    active_model=node_models['active'],
+                    asset_display_names=descendant_names,
+                    annualize=self.annualize
+                )
+                
+                # Store RiskResult objects directly (no complex context)
+                self._node_risk_results[node.component_id] = {
+                    'portfolio': portfolio_result,
+                    'benchmark': benchmark_result,
+                    'active': active_result
+                }
+
+                # Store models
+                self._node_models[node.component_id] = node_models
+
+                self.logger.info(f"Calculated risks for node {node.component_id}: "
+                               f"portfolio={portfolio_result.total_risk:.4f}, "
+                               f"benchmark={benchmark_result.total_risk:.4f}, "
+                               f"active={active_result.total_risk:.4f}")
+                
+                # Store in metric store for backward compatibility (simplified)
+                if self.metric_store:
+                    self.metric_store.set_metric(
+                        node.component_id,
+                        'risk_result_portfolio',
+                        ObjectMetric(portfolio_result)
+                    )
+                    self.metric_store.set_metric(
+                        node.component_id,
+                        'risk_result_benchmark', 
+                        ObjectMetric(benchmark_result)
+                    )
+                    self.metric_store.set_metric(
+                        node.component_id,
+                        'risk_result_active',
+                        ObjectMetric(active_result)
+                    )
+                    
+                    # Validate storage consistency between instance vars and metric store
+                    validation_result = self.validate_storage_consistency(node.component_id)
+                    if not validation_result['consistent']:
+                        self.logger.warning(f"Storage inconsistency detected for {node.component_id}")
+                
+            except Exception as e:
+                self.logger.error(f"Failed to calculate risk for node {node.component_id}: {e}")
         
         self._processed_components.add(node.component_id)
         
-        # Log timing information
-        end_time = time.time()
-        processing_time = end_time - start_time
-        self.logger.info(f"Completed node {node.component_id} processing in {processing_time:.3f} seconds")
-        if processing_time > 5.0:  # Log warning for slow processing
-            self.logger.warning(f"Slow node processing detected: {node.component_id} took {processing_time:.3f} seconds")
+        processing_time = time.time() - start_time
+        self.logger.info(f"Completed simplified node {node.component_id} processing in {processing_time:.3f} seconds")
+    
+    def _re_estimate_combined_models(self, node_id: str, descendant_leaves: List[str]) -> Optional[Dict[str, Any]]:
+        """
+        CRITICAL: Re-estimate models with ALL descendant leaves together to capture cross-correlations.
         
-        self.logger.debug(f"Completed processing node {node.component_id}")
+        This is mathematically required because:
+        - Residual returns have cross-correlations between assets
+        - The residual covariance matrix is NOT diagonal - it captures correlations between asset-specific returns
+        - These cross-correlations are essential for accurate risk decomposition
+        - You CANNOT aggregate individual leaf risk results - you must re-estimate with all leaves together
+        
+        Parameters
+        ----------
+        node_id : str
+            Node component ID
+        descendant_leaves : List[str]
+            List of descendant leaf component IDs
+            
+        Returns
+        -------
+        Dict[str, LinearRiskModel] or None
+            Dictionary containing re-estimated models for 'portfolio', 'benchmark', 'active'
+        """
+        try:
+            self.logger.debug(f"Re-estimating combined models for {node_id} with {len(descendant_leaves)} leaves")
+            
+            # Combine all descendant leaf returns into single DataFrames
+            portfolio_returns_data = {}
+            benchmark_returns_data = {}
+            
+            for leaf_id in descendant_leaves:
+                # Get returns data from metric store
+                portfolio_returns = self._get_component_returns_by_id(leaf_id, self.portfolio_returns_metric)
+                benchmark_returns = self._get_component_returns_by_id(leaf_id, self.benchmark_returns_metric)
+                
+                if portfolio_returns is not None and benchmark_returns is not None:
+                    portfolio_returns_data[leaf_id] = portfolio_returns
+                    benchmark_returns_data[leaf_id] = benchmark_returns
+                else:
+                    self.logger.warning(f"Missing returns data for leaf {leaf_id} in node {node_id}")
+            
+            if not portfolio_returns_data or not benchmark_returns_data:
+                self.logger.error(f"No valid returns data found for descendants of node {node_id}")
+                return None
+            
+            # Create combined DataFrames
+            portfolio_returns_df = pd.DataFrame(portfolio_returns_data)
+            benchmark_returns_df = pd.DataFrame(benchmark_returns_data)
+            active_returns_df = portfolio_returns_df - benchmark_returns_df
+            
+            self.logger.info(f"Combined returns data for {node_id}: "
+                           f"portfolio={portfolio_returns_df.shape}, "
+                           f"benchmark={benchmark_returns_df.shape}, "
+                           f"active={active_returns_df.shape}")
+            
+            # Re-estimate models with combined data - captures cross-correlations!
+            models = {}
+            for return_type, returns_df in [
+                ('portfolio', portfolio_returns_df),
+                ('benchmark', benchmark_returns_df),
+                ('active', active_returns_df)
+            ]:
+                try:
+                    # Fit NEW models to combined data - captures residual correlations!
+                    combined_model = self.estimator.fit(
+                        asset_returns=returns_df,
+                        factor_returns=self.factor_returns
+                    )
+                    models[return_type] = combined_model
+                    
+                    self.logger.debug(f"Re-estimated {return_type} model for {node_id}: "
+                                    f"beta={combined_model.beta.shape}, "
+                                    f"resvar={combined_model.resvar.shape}")
+                                    
+                except Exception as e:
+                    self.logger.error(f"Failed to re-estimate {return_type} model for {node_id}: {e}")
+                    return None
+            
+            self.logger.info(f"Successfully re-estimated all models for node {node_id}")
+            return models
+            
+        except Exception as e:
+            self.logger.error(f"Failed to re-estimate combined models for {node_id}: {e}")
+            return None
+    
+    def _get_component_returns_by_id(self, component_id: str, metric_name: str) -> Optional[pd.Series]:
+        """Get returns data for a component by ID from metric store"""
+        if not self.metric_store:
+            return None
+        
+        metric = self.metric_store.get_metric(component_id, metric_name)
+        if metric is None:
+            return None
+        
+        returns_data = metric.value()
+        if isinstance(returns_data, pd.Series):
+            return returns_data
+        elif isinstance(returns_data, (int, float)):
+            # If scalar, create a series with factor returns index
+            return pd.Series(returns_data, index=self.factor_returns.index)
+        
+        return None
+    
+    def validate_risk_estimates(self, node_id: str) -> Dict[str, Any]:
+        """
+        Validate that model-estimated risks match empirical calculations.
+        
+        This is the ultimate test of correctness as required by the prompt.
+        For each node, validates that:
+        - Empirical portfolio risk = Model-estimated risk
+        - Empirical benchmark risk = Model-estimated risk  
+        - Empirical active risk = Model-estimated risk
+        
+        Parameters
+        ----------
+        node_id : str
+            Node component ID to validate
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Validation results with pass/fail status and any discrepancies
+        """
+        try:
+            self.logger.info(f"Validating risk estimates for node {node_id}")
+            
+            # Get stored risk results
+            if node_id not in self._node_risk_results:
+                return {
+                    'node_id': node_id,
+                    'validation_passed': False,
+                    'error': f'No risk results found for node {node_id}'
+                }
+            
+            risk_results = self._node_risk_results[node_id]
+            
+            # Get descendant leaves and their returns
+            if self.metric_store:
+                asset_names_metric = self.metric_store.get_metric(node_id, 'asset_names')
+                if not asset_names_metric:
+                    return {
+                        'node_id': node_id,
+                        'validation_passed': False,
+                        'error': f'No asset names found for node {node_id}'
+                    }
+                descendant_leaves = asset_names_metric.value()
+            else:
+                return {
+                    'node_id': node_id,
+                    'validation_passed': False,
+                    'error': 'No metric store available for validation'
+                }
+            
+            # Calculate empirical risks from actual returns
+            empirical_portfolio_risk = self._calculate_empirical_risk(node_id, descendant_leaves, 'portfolio')
+            empirical_benchmark_risk = self._calculate_empirical_risk(node_id, descendant_leaves, 'benchmark')
+            empirical_active_risk = self._calculate_empirical_risk(node_id, descendant_leaves, 'active')
+            
+            if any(risk is None for risk in [empirical_portfolio_risk, empirical_benchmark_risk, empirical_active_risk]):
+                return {
+                    'node_id': node_id,
+                    'validation_passed': False,
+                    'error': 'Failed to calculate empirical risks'
+                }
+            
+            # Compare with model estimates (tolerance: 1e-6 as specified in prompt)
+            tolerance = 1e-6
+            validations = {
+                'portfolio': {
+                    'empirical': empirical_portfolio_risk,
+                    'model': risk_results['portfolio'].total_risk,
+                    'difference': abs(empirical_portfolio_risk - risk_results['portfolio'].total_risk),
+                    'passed': abs(empirical_portfolio_risk - risk_results['portfolio'].total_risk) < tolerance
+                },
+                'benchmark': {
+                    'empirical': empirical_benchmark_risk,
+                    'model': risk_results['benchmark'].total_risk,
+                    'difference': abs(empirical_benchmark_risk - risk_results['benchmark'].total_risk),
+                    'passed': abs(empirical_benchmark_risk - risk_results['benchmark'].total_risk) < tolerance
+                },
+                'active': {
+                    'empirical': empirical_active_risk,
+                    'model': risk_results['active'].total_risk,
+                    'difference': abs(empirical_active_risk - risk_results['active'].total_risk),
+                    'passed': abs(empirical_active_risk - risk_results['active'].total_risk) < tolerance
+                }
+            }
+            
+            # Log warnings for any validation failures
+            all_passed = True
+            for risk_type, validation in validations.items():
+                if not validation['passed']:
+                    all_passed = False
+                    self.logger.warning(
+                        f"Risk validation failed for {node_id} {risk_type}: "
+                        f"empirical={validation['empirical']:.4%}, "
+                        f"model={validation['model']:.4%}, "
+                        f"difference={validation['difference']:.4%}"
+                    )
+                else:
+                    self.logger.debug(
+                        f"Risk validation passed for {node_id} {risk_type}: "
+                        f"empirical={validation['empirical']:.4%}, "
+                        f"model={validation['model']:.4%}, "
+                        f"difference={validation['difference']:.6%}"
+                    )
+            
+            return {
+                'node_id': node_id,
+                'validation_passed': all_passed,
+                'validations': validations,
+                'tolerance': tolerance,
+                'message': 'All validations passed' if all_passed else 'Some validations failed'
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Risk validation failed for {node_id}: {e}")
+            return {
+                'node_id': node_id,
+                'validation_passed': False,
+                'error': str(e)
+            }
+    
+    def _calculate_empirical_risk(self, node_id: str, descendant_leaves: List[str], return_type: str) -> Optional[float]:
+        """
+        Calculate empirical risk from weighted leaf returns as specified in the prompt.
+        
+        This calculates the actual risk of the weighted portfolio/benchmark/active returns
+        to compare against model estimates.
+        """
+        try:
+            # Get effective weights for this node
+            if node_id not in self._descendant_weights:
+                self.logger.error(f"No effective weights found for node {node_id}")
+                return None
+            
+            if return_type == 'active':
+                weights = (self._descendant_weights[node_id]['portfolio'] - 
+                          self._descendant_weights[node_id]['benchmark'])
+            else:
+                weights = self._descendant_weights[node_id][return_type]
+            
+            # Calculate weighted returns
+            weighted_returns = None
+            
+            for i, leaf_id in enumerate(descendant_leaves):
+                if return_type == 'active':
+                    # Calculate active returns from portfolio - benchmark
+                    portfolio_returns = self._get_component_returns_by_id(leaf_id, self.portfolio_returns_metric)
+                    benchmark_returns = self._get_component_returns_by_id(leaf_id, self.benchmark_returns_metric)
+                    if portfolio_returns is not None and benchmark_returns is not None:
+                        leaf_returns = portfolio_returns - benchmark_returns
+                    else:
+                        continue
+                elif return_type == 'portfolio':
+                    leaf_returns = self._get_component_returns_by_id(leaf_id, self.portfolio_returns_metric)
+                elif return_type == 'benchmark':
+                    leaf_returns = self._get_component_returns_by_id(leaf_id, self.benchmark_returns_metric)
+                
+                if leaf_returns is not None and i < len(weights):
+                    if weighted_returns is None:
+                        weighted_returns = weights[i] * leaf_returns
+                    else:
+                        weighted_returns += weights[i] * leaf_returns
+            
+            if weighted_returns is None:
+                return None
+            
+            # Calculate empirical risk (standard deviation)
+            empirical_risk = weighted_returns.std()
+            
+            # Annualize if needed (same logic as in model)
+            if self.annualize:
+                # Determine annualization factor from factor returns frequency
+                freq = getattr(self.factor_returns.index, 'freq', None)
+                if freq is not None:
+                    if 'D' in str(freq) or 'B' in str(freq):
+                        periods_per_year = 252  # Business days
+                    elif 'M' in str(freq):
+                        periods_per_year = 12   # Months
+                    elif 'W' in str(freq):
+                        periods_per_year = 52   # Weeks
+                    else:
+                        periods_per_year = 252  # Default
+                else:
+                    periods_per_year = 252  # Default
+                
+                empirical_risk *= np.sqrt(periods_per_year)
+            
+            return float(empirical_risk)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to calculate empirical {return_type} risk for {node_id}: {e}")
+            return None
     
     def _log_risk_model_details(self, model: 'LinearRiskModel', leaf_id: str, return_type: str) -> None:
         """Log comprehensive risk model statistics and diagnostics"""
@@ -971,264 +1389,16 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         else:
             return self._node_weights[node_id].get(return_type)
     
-    def _build_unified_node_matrices(self, node: 'PortfolioNode', descendant_leaves: List[str]) -> Optional[Dict[str, Dict[str, np.ndarray]]]:
-        """Build unified beta, resvar, and weight matrices for the node"""
-        if not descendant_leaves:
-            self.logger.warning(f"No descendant leaves provided for node {node.component_id}")
-            return None
-        
-        self.logger.debug(f"Building unified matrices for node {node.component_id} with {len(descendant_leaves)} descendant leaves")
-        unified = {'portfolio': {}, 'benchmark': {}, 'active': {}}
-        
-        # Build matrices for each return type
-        for return_type in ['portfolio', 'benchmark', 'active']:
-            self.logger.debug(f"Building {return_type} matrices for node {node.component_id}")
-            betas = []
-            resvars = []
-            valid_leaves = []
-            valid_leaf_indices = []
-            
-            # Collect beta, residual variance, residual returns, and asset returns from leaf models
-            residual_returns_list = []
-            asset_returns_list = []
-            for i, leaf_id in enumerate(descendant_leaves):
-                if leaf_id in self._leaf_models and return_type in self._leaf_models[leaf_id]:
-                    model = self._leaf_models[leaf_id][return_type]
-                    betas.append(model.beta[0])  # First (and only) asset
-                    resvars.append(model.resvar[0, 0])  # Diagonal element
-                    
-                    # Extract residual returns time series for this leaf
-                    if hasattr(model, 'residual_returns') and model.residual_returns is not None:
-                        # Get residual returns for this specific leaf (should be single column)
-                        leaf_residuals = model.residual_returns[leaf_id]
-                        residual_returns_list.append(leaf_residuals)
-                    else:
-                        # Create empty series if residual returns not available
-                        empty_series = pd.Series(np.nan, index=self.factor_returns.index, name=leaf_id)
-                        residual_returns_list.append(empty_series)
-                    
-                    # Extract asset returns time series for this leaf
-                    if hasattr(model, 'asset_returns') and model.asset_returns is not None:
-                        # Get asset returns for this specific leaf (should be single column)
-                        leaf_asset_returns = model.asset_returns[leaf_id]
-                        asset_returns_list.append(leaf_asset_returns)
-                    else:
-                        # Create empty series if asset returns not available
-                        empty_series = pd.Series(np.nan, index=self.factor_returns.index, name=leaf_id)
-                        asset_returns_list.append(empty_series)
-                    
-                    valid_leaves.append(leaf_id)
-                    valid_leaf_indices.append(i)
-            
-            if not betas:
-                self.logger.debug(f"No {return_type} models found for node {node.component_id}, skipping")
-                continue
-            
-            # Check if we have any valid leaves for error handling
-            if not valid_leaves:
-                self.logger.warning(f"No valid leaves found for {return_type} matrices in node {node.component_id}")
-                continue
-            
-            self.logger.debug(f"Building {return_type} matrices with {len(valid_leaves)} valid leaves: {valid_leaves}")
-            
-            # Stack into matrices
-            beta_matrix = np.vstack(betas)
-            resvar_vector = np.array(resvars)
-            
-            # Log matrix creation details
-            self.logger.debug(f"Created {return_type} beta matrix: shape {beta_matrix.shape}")
-            self.logger.debug(f"Created {return_type} resvar vector: shape {resvar_vector.shape}, mean={np.mean(resvar_vector):.6f}")
-            
-            # Log detailed matrix diagnostics
-            self._log_matrix_diagnostics(beta_matrix, f"{return_type}_beta", node.component_id)
-            self._log_matrix_diagnostics(resvar_vector, f"{return_type}_resvar", node.component_id)
-            
-            # Get effective weights for this return type
-            if return_type == 'active':
-                # Active weights = portfolio - benchmark (computed on-the-fly)
-                portfolio_weights = self._descendant_weights[node.component_id]['portfolio']
-                benchmark_weights = self._descendant_weights[node.component_id]['benchmark']
-                all_weights = portfolio_weights - benchmark_weights
-                self.logger.debug(f"Computed active weights from portfolio-benchmark difference")
-            else:
-                # Portfolio or benchmark weights
-                all_weights = self._descendant_weights[node.component_id][return_type]
-                self.logger.debug(f"Using stored {return_type} weights")
-            
-            # Align weights with valid leaves only
-            aligned_weights = np.array([all_weights[i] for i in valid_leaf_indices])
-            self.logger.debug(f"Aligned {return_type} weights: shape={aligned_weights.shape}, sum={np.sum(aligned_weights):.6f}")
-            
-            # Log detailed weight diagnostics
-            self._log_matrix_diagnostics(aligned_weights, f"{return_type}_weights", node.component_id)
-            
-            # Get factor covariance from first valid model
-            first_model = self._leaf_models[valid_leaves[0]][return_type]
-            factor_covariance = first_model.factor_covar
-            self.logger.debug(f"Using factor covariance from {valid_leaves[0]}: shape {factor_covariance.shape}")
-            
-            # Log factor covariance diagnostics
-            self._log_matrix_diagnostics(factor_covariance, f"{return_type}_factor_covar", node.component_id)
-            
-            # Validate factor covariance consistency across models
-            covar_mismatches = 0
-            for leaf_id in valid_leaves[1:]:
-                model = self._leaf_models[leaf_id][return_type]
-                if not np.allclose(model.factor_covar, factor_covariance, rtol=1e-6):
-                    covar_mismatches += 1
-                    self.logger.warning(f"Factor covariance mismatch between {valid_leaves[0]} and {leaf_id} for {return_type}")
-                    
-            if covar_mismatches > 0:
-                self.logger.warning(f"Found {covar_mismatches} factor covariance mismatches out of {len(valid_leaves)} models for {return_type}")
-            else:
-                self.logger.debug(f"Factor covariance matrices consistent across all {len(valid_leaves)} models for {return_type}")
-            
-            # Stack residual returns into unified DataFrame
-            residual_returns_df = None
-            if residual_returns_list:
-                try:
-                    # Concatenate all residual return series into a DataFrame
-                    residual_returns_df = pd.concat(residual_returns_list, axis=1)
-                    residual_returns_df.columns = valid_leaves  # Ensure column names match leaf IDs
-                except Exception as e:
-                    import warnings
-                    warnings.warn(f"Failed to stack residual returns for {return_type} return type: {e}")
-                    # Create empty DataFrame with proper structure as fallback
-                    residual_returns_df = pd.DataFrame(
-                        index=self.factor_returns.index, 
-                        columns=valid_leaves
-                    ).fillna(np.nan)
-            else:
-                # Create empty DataFrame if no residual returns available
-                residual_returns_df = pd.DataFrame(
-                    index=self.factor_returns.index, 
-                    columns=valid_leaves
-                ).fillna(np.nan)
-            
-            # Compute residual covariance matrix from residual returns
-            residual_cov_matrix = None
-            if residual_returns_df is not None and not residual_returns_df.empty:
-                try:
-                    # Remove rows with all NaN values before computing covariance
-                    clean_residuals = residual_returns_df.dropna(how='all')
-                    
-                    if len(clean_residuals) > 1:  # Need at least 2 observations for covariance
-                        # Compute sample covariance matrix
-                        raw_cov = clean_residuals.cov().values
-                        
-                        # Apply nearest positive semi-definite correction (same as LinearRiskModelEstimator)
-                        residual_cov_matrix = cov_nearest(raw_cov)
-                    else:
-                        # Fallback: diagonal matrix using individual resvars if insufficient data
-                        residual_cov_matrix = resvar_vector
-                except Exception as e:
-                    import warnings
-                    warnings.warn(f"Failed to compute residual covariance for {return_type} return type: {e}")
-                    # Fallback: diagonal matrix using individual resvars
-                    residual_cov_matrix = resvar_vector
-            else:
-                # If all else fails,
-                # use diagonal matrix from individual residual variances for consistency
-                self.logger.warning(f"No valid residual returns data for {return_type} return type, using diagonal matrix from resvars")
-                residual_cov_matrix = np.diag(resvar_vector)
-            
-            # Stack asset returns into unified DataFrame
-            asset_returns_df = None
-            if asset_returns_list:
-                try:
-                    # Concatenate all asset return series into a DataFrame
-                    asset_returns_df = pd.concat(asset_returns_list, axis=1)
-                    asset_returns_df.columns = valid_leaves  # Ensure column names match leaf IDs
-                except Exception as e:
-                    import warnings
-                    warnings.warn(f"Failed to stack asset returns for {return_type} return type: {e}")
-                    # Create empty DataFrame with proper structure as fallback
-                    asset_returns_df = pd.DataFrame(
-                        index=self.factor_returns.index, 
-                        columns=valid_leaves
-                    ).fillna(np.nan)
-            else:
-                # Create empty DataFrame if no asset returns available
-                asset_returns_df = pd.DataFrame(
-                    index=self.factor_returns.index, 
-                    columns=valid_leaves
-                ).fillna(np.nan)
-            
-            # Get factor returns (same for all models, so use the first valid model or self.factor_returns)
-            factor_returns_df = None
-            if valid_leaves and self._leaf_models[valid_leaves[0]][return_type]:
-                first_model = self._leaf_models[valid_leaves[0]][return_type]
-                if hasattr(first_model, 'factor_returns') and first_model.factor_returns is not None:
-                    factor_returns_df = first_model.factor_returns
-                else:
-                    # Fallback to the shared factor returns from the visitor
-                    factor_returns_df = self.factor_returns
-            else:
-                # Fallback to the shared factor returns from the visitor
-                factor_returns_df = self.factor_returns
-            
-            # Get frequency from the first valid model (same for all models)
-            frequency = None
-            if valid_leaves and self._leaf_models[valid_leaves[0]][return_type]:
-                first_model = self._leaf_models[valid_leaves[0]][return_type]
-                if hasattr(first_model, 'frequency') and first_model.frequency is not None:
-                    frequency = first_model.frequency
-                else:
-                    # Fallback: try to infer frequency from factor_returns index
-                    frequency = pd.infer_freq(self.factor_returns.index)
-            else:
-                # Fallback: try to infer frequency from factor_returns index
-                frequency = pd.infer_freq(self.factor_returns.index)
-            
-            # Store in unified structure
-            unified[return_type] = {
-                'betas': beta_matrix,
-                'resvars': resvar_vector,
-                'weights': aligned_weights,
-                'factor_covariance': factor_covariance,
-                'descendant_leaves': valid_leaves,
-                'residual_returns': residual_returns_df,
-                'residual_covariance': residual_cov_matrix,
-                'asset_returns': asset_returns_df,
-                'factor_returns': factor_returns_df,
-                'frequency': frequency
-            }
-        
-        # Compute cross-covariance matrix between benchmark and active returns if both are available
-        if 'benchmark' in unified and 'active' in unified:
-            try:
-                benchmark_returns = unified['benchmark']['asset_returns']
-                active_returns = unified['active']['asset_returns']  # Active returns should be asset returns
-                
-                if (benchmark_returns is not None and active_returns is not None 
-                    and not benchmark_returns.empty and not active_returns.empty):
-                    
-                    # Calculate cross-covariance using RiskCalculator
-                    from spark.risk.calculator import RiskCalculator
-                    cross_covar = RiskCalculator.calculate_cross_covariance(
-                        benchmark_returns.values, active_returns.values
-                    )
-                    
-                    # Add cross-covariance to unified structure for use in risk decomposition
-                    unified['cross_covariance'] = cross_covar
-                    self.logger.debug(f"Computed cross-covariance matrix: shape {cross_covar.shape}")
-                    
-                else:
-                    self.logger.warning(f"Cannot compute cross-covariance for node {node.component_id}: missing return data")
-                    
-            except Exception as e:
-                self.logger.warning(f"Failed to compute cross-covariance for node {node.component_id}: {e}")
-        
-        return unified if any(unified.values()) else None
+    # NOTE: Removed _build_unified_node_matrices method (247 lines) - replaced with direct model re-estimation
     
     @property
-    def result(self) -> Dict[str, Dict[str, Dict[str, np.ndarray]]]:
-        """Get all unified matrices for processed nodes"""
-        return self._unified_matrices.copy()
+    def result(self) -> Dict[str, Dict[str, Any]]:
+        """Get all risk results for processed nodes"""
+        return self._node_risk_results.copy()
     
-    def get_node_unified_matrices(self, node_id: str) -> Optional[Dict[str, Dict[str, np.ndarray]]]:
-        """Get unified matrices for a specific node"""
-        return self._unified_matrices.get(node_id)
+    def get_node_risk_results(self, node_id: str) -> Optional[Dict[str, Any]]:
+        """Get risk results for a specific node"""
+        return self._node_risk_results.get(node_id)
     
     def get_processed_components(self) -> Set[str]:
         """Get set of all processed component IDs"""
@@ -1264,21 +1434,28 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         """
         Get risk contribution matrix (factors × components).
         
-        This is a basic implementation that tries to extract a risk matrix
-        from the unified matrices. Subclasses may override for more specific behavior.
+        Extracts factor contributions from RiskResult objects.
         """
-        # Try to extract from stored results
-        if not self._unified_matrices:
+        # Try to extract from stored risk results
+        if not self._node_risk_results:
             return None
         
         try:
-            # Try to build a simple contribution matrix
             n_factors = len(self.factor_names)
             n_components = len(self._processed_components)
             
-            # Return a placeholder matrix for now
-            # Real implementation would depend on specific visitor calculations
-            return np.zeros((n_factors, n_components))
+            contribution_matrix = np.zeros((n_factors, n_components))
+            
+            # Fill matrix with factor contributions from stored results
+            for i, component_id in enumerate(self._processed_components):
+                if component_id in self._node_risk_results:
+                    portfolio_result = self._node_risk_results[component_id].get('portfolio')
+                    if portfolio_result and hasattr(portfolio_result, 'factor_contributions'):
+                        for j, factor_name in enumerate(self.factor_names):
+                            if factor_name in portfolio_result.factor_contributions:
+                                contribution_matrix[j, i] = portfolio_result.factor_contributions[factor_name]
+            
+            return contribution_matrix
             
         except Exception:
             return None
@@ -1296,6 +1473,88 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
             'validation_timestamp': pd.Timestamp.now().isoformat(),
             'status': 'visitor_validation_basic'
         }
+    
+    def validate_storage_consistency(self, component_id: str) -> Dict[str, Any]:
+        """
+        Validate that risk results are consistent between instance variables and metric store.
+        
+        This ensures the dual storage approach doesn't result in inconsistent data.
+        
+        Parameters
+        ----------
+        component_id : str
+            Component ID to validate storage consistency for
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Validation results with consistency status and any discrepancies
+        """
+        validation_result = {
+            'component_id': component_id,
+            'consistent': True,
+            'errors': [],
+            'warnings': []
+        }
+        
+        try:
+            # Get results from instance variables
+            instance_results = self._node_risk_results.get(component_id, {})
+            
+            # Get results from metric store
+            metric_store_results = {}
+            if self.metric_store:
+                for lens in ['portfolio', 'benchmark', 'active']:
+                    metric_key = f'risk_result_{lens}'
+                    metric = self.metric_store.get_metric(component_id, metric_key)
+                    if metric:
+                        metric_store_results[lens] = metric.value()
+            
+            # Compare the two sources
+            for lens in ['portfolio', 'benchmark', 'active']:
+                instance_result = instance_results.get(lens)
+                metric_result = metric_store_results.get(lens)
+                
+                if instance_result is None and metric_result is None:
+                    continue  # Both missing - consistent
+                    
+                if instance_result is None and metric_result is not None:
+                    validation_result['errors'].append(
+                        f"{lens}: Missing from instance variables but present in metric store"
+                    )
+                    validation_result['consistent'] = False
+                    
+                elif instance_result is not None and metric_result is None:
+                    validation_result['errors'].append(
+                        f"{lens}: Present in instance variables but missing from metric store"
+                    )
+                    validation_result['consistent'] = False
+                    
+                elif instance_result is not None and metric_result is not None:
+                    # Both present - check if they're the same object or have same total risk
+                    if hasattr(instance_result, 'total_risk') and hasattr(metric_result, 'total_risk'):
+                        if abs(instance_result.total_risk - metric_result.total_risk) > 1e-9:
+                            validation_result['warnings'].append(
+                                f"{lens}: Total risk differs between storage locations "
+                                f"(instance: {instance_result.total_risk:.6f}, "
+                                f"metric_store: {metric_result.total_risk:.6f})"
+                            )
+            
+            # Log validation results
+            if validation_result['consistent']:
+                self.logger.debug(f"Storage consistency validated for {component_id}")
+            else:
+                self.logger.warning(
+                    f"Storage inconsistency detected for {component_id}: "
+                    f"{len(validation_result['errors'])} errors, {len(validation_result['warnings'])} warnings"
+                )
+                
+        except Exception as e:
+            validation_result['consistent'] = False
+            validation_result['errors'].append(f"Validation error: {str(e)}")
+            self.logger.error(f"Failed to validate storage consistency for {component_id}: {e}")
+        
+        return validation_result
     
     def to_unified_schema(self, component_id: str) -> 'RiskResultSchema':
         """
