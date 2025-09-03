@@ -14,6 +14,56 @@ from services.risk_analysis_service import RiskAnalysisService
 logger = logging.getLogger(__name__)
 
 
+class FrequencyManager:
+    """Manages data frequency and resampling state."""
+    
+    SUPPORTED_FREQUENCIES = ["D", "B", "W-FRI", "M"]
+    NATIVE_FREQUENCIES = ["D", "B"]
+    
+    def __init__(self, native_frequency: str = "B"):
+        """
+        Initialize frequency manager.
+        
+        Args:
+            native_frequency: The native frequency of the data (default: "B" for business daily)
+        """
+        self.native_frequency = native_frequency
+        self.current_frequency = native_frequency
+        self.is_resampled = False
+    
+    def set_frequency(self, new_frequency: str) -> bool:
+        """
+        Set new frequency. Returns True if frequency changed.
+        
+        Args:
+            new_frequency: New frequency to set
+            
+        Returns:
+            True if frequency changed, False otherwise
+            
+        Raises:
+            ValueError: If frequency is not supported
+        """
+        if new_frequency not in self.SUPPORTED_FREQUENCIES:
+            raise ValueError(f"Unsupported frequency: {new_frequency}. Supported: {self.SUPPORTED_FREQUENCIES}")
+        
+        if new_frequency != self.current_frequency:
+            old_frequency = self.current_frequency
+            self.current_frequency = new_frequency
+            self.is_resampled = new_frequency not in self.NATIVE_FREQUENCIES
+            logger.info(f"Frequency changed from {old_frequency} to {new_frequency} (resampled: {self.is_resampled})")
+            return True
+        return False
+    
+    def get_current_frequency(self) -> str:
+        """Get current frequency."""
+        return self.current_frequency
+    
+    def is_native_frequency(self) -> bool:
+        """Check if current frequency is native (no resampling needed)."""
+        return not self.is_resampled
+
+
 class DataAccessService:
     """
     Provides UI-friendly data access methods for the portfolio risk analysis system.
@@ -34,7 +84,133 @@ class DataAccessService:
         self.factor_provider = risk_analysis_service.factor_provider
         self.portfolio_provider = risk_analysis_service.portfolio_provider
         
-        logger.info("Initialized DataAccessService")
+        # Initialize frequency manager
+        self.frequency_manager = FrequencyManager()
+        
+        logger.info("Initialized DataAccessService with frequency manager")
+    
+    # Frequency management methods
+    def set_frequency(self, frequency: str) -> bool:
+        """
+        Set data frequency and trigger re-initialization if needed.
+        
+        Args:
+            frequency: New frequency to set ("D", "B", "W-FRI", "M")
+            
+        Returns:
+            True if frequency changed and system was re-initialized, False otherwise
+            
+        Raises:
+            ValueError: If frequency is not supported
+        """
+        try:
+            frequency_changed = self.frequency_manager.set_frequency(frequency)
+            
+            if frequency_changed:
+                logger.info(f"Frequency changed to {frequency}, triggering system re-initialization")
+                self._trigger_system_reinitialization()
+                return True
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error setting frequency to {frequency}: {e}")
+            raise
+    
+    def get_current_frequency(self) -> str:
+        """Get current data frequency."""
+        return self.frequency_manager.get_current_frequency()
+    
+    def get_frequency_status(self) -> Dict[str, Any]:
+        """Get detailed frequency status for debugging."""
+        return {
+            "current_frequency": self.frequency_manager.current_frequency,
+            "native_frequency": self.frequency_manager.native_frequency,
+            "is_resampled": self.frequency_manager.is_resampled,
+            "supported_frequencies": self.frequency_manager.SUPPORTED_FREQUENCIES
+        }
+    
+    def is_native_frequency(self) -> bool:
+        """Check if current frequency is native (no resampling)."""
+        return self.frequency_manager.is_native_frequency()
+    
+    def _trigger_system_reinitialization(self):
+        """Trigger full system re-initialization after frequency change."""
+        try:
+            logger.info("Starting system re-initialization for frequency change")
+            
+            # Clear portfolio graph and risk computation caches
+            if hasattr(self.risk_analysis_service, '_portfolio_graph'):
+                self.risk_analysis_service._portfolio_graph = None
+                logger.info("Cleared portfolio graph cache")
+            
+            if hasattr(self.risk_analysis_service, 'risk_computation') and self.risk_analysis_service.risk_computation:
+                if hasattr(self.risk_analysis_service.risk_computation, 'clear_cache'):
+                    self.risk_analysis_service.risk_computation.clear_cache()
+                    logger.info("Cleared risk computation cache")
+            
+            # Re-initialize the entire system
+            logger.info("Re-initializing risk analysis service")
+            success = self.risk_analysis_service.initialize()
+            
+            if not success:
+                logger.error("Failed to re-initialize system after frequency change")
+                raise RuntimeError("System re-initialization failed")
+            else:
+                logger.info("System re-initialization completed successfully")
+                
+        except Exception as e:
+            logger.error(f"Error during system re-initialization: {e}")
+            raise RuntimeError(f"Failed to re-initialize system: {e}")
+    
+    # Resampling helper methods
+    def _resample_returns_series(self, series: pd.Series) -> pd.Series:
+        """
+        Resample returns series using compound return calculation.
+        
+        Args:
+            series: Returns series to resample
+            
+        Returns:
+            Resampled series or original series if no resampling needed
+        """
+        if not self.frequency_manager.is_resampled or series.empty:
+            return series
+        
+        freq = self.frequency_manager.current_frequency
+        try:
+            # Use compound return calculation: (1+r).prod() - 1
+            resampled = series.resample(freq).apply(lambda x: (1 + x).prod() - 1)
+            resampled.name = series.name
+            logger.debug(f"Resampled series {series.name} from {len(series)} to {len(resampled)} observations at {freq} frequency")
+            return resampled.dropna()
+            
+        except Exception as e:
+            logger.error(f"Error resampling series {series.name} to {freq}: {e}")
+            return series
+    
+    def _resample_returns_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Resample returns DataFrame using compound return calculation.
+        
+        Args:
+            df: Returns DataFrame to resample
+            
+        Returns:
+            Resampled DataFrame or original DataFrame if no resampling needed
+        """
+        if not self.frequency_manager.is_resampled or df.empty:
+            return df
+        
+        freq = self.frequency_manager.current_frequency
+        try:
+            # Apply compound return calculation to each column
+            resampled = df.resample(freq).apply(lambda x: (1 + x).prod() - 1)
+            logger.debug(f"Resampled DataFrame from {len(df)} to {len(resampled)} observations at {freq} frequency")
+            return resampled.dropna()
+            
+        except Exception as e:
+            logger.error(f"Error resampling DataFrame to {freq}: {e}")
+            return df
     
     # Time series access methods
     def get_portfolio_returns(self, component_id: str) -> pd.Series:
@@ -48,7 +224,8 @@ class DataAccessService:
             Series with dates as index and portfolio returns as values
         """
         try:
-            return self.portfolio_provider.get_component_returns(component_id, 'portfolio')
+            returns = self.portfolio_provider.get_component_returns(component_id, 'portfolio')
+            return self._resample_returns_series(returns)
         except Exception as e:
             logger.error(f"Error getting portfolio returns for {component_id}: {e}")
             return pd.Series(dtype=float, name=f"{component_id}_portfolio")
@@ -64,7 +241,8 @@ class DataAccessService:
             Series with dates as index and benchmark returns as values
         """
         try:
-            return self.portfolio_provider.get_component_returns(component_id, 'benchmark')
+            returns = self.portfolio_provider.get_component_returns(component_id, 'benchmark')
+            return self._resample_returns_series(returns)
         except Exception as e:
             logger.error(f"Error getting benchmark returns for {component_id}: {e}")
             return pd.Series(dtype=float, name=f"{component_id}_benchmark")
@@ -80,6 +258,7 @@ class DataAccessService:
             Series with dates as index and active returns as values
         """
         try:
+            # Get resampled portfolio and benchmark returns separately
             portfolio_returns = self.get_portfolio_returns(component_id)
             benchmark_returns = self.get_benchmark_returns(component_id)
             
@@ -158,7 +337,8 @@ class DataAccessService:
         """
         try:
             if return_type in ['portfolio', 'benchmark']:
-                return self.portfolio_provider.get_returns_matrix(return_type)
+                matrix = self.portfolio_provider.get_returns_matrix(return_type)
+                return self._resample_returns_dataframe(matrix)
             elif return_type == 'active':
                 # Compute active returns matrix
                 portfolio_matrix = self.portfolio_provider.get_returns_matrix('portfolio')
@@ -167,14 +347,18 @@ class DataAccessService:
                 if portfolio_matrix.empty or benchmark_matrix.empty:
                     return pd.DataFrame()
                 
+                # Apply resampling to both matrices before computing active returns
+                portfolio_resampled = self._resample_returns_dataframe(portfolio_matrix)
+                benchmark_resampled = self._resample_returns_dataframe(benchmark_matrix)
+                
                 # Filter to requested components
-                common_components = list(set(component_ids) & set(portfolio_matrix.columns) & set(benchmark_matrix.columns))
+                common_components = list(set(component_ids) & set(portfolio_resampled.columns) & set(benchmark_resampled.columns))
                 
                 if not common_components:
                     return pd.DataFrame()
                 
-                portfolio_filtered = portfolio_matrix[common_components]
-                benchmark_filtered = benchmark_matrix[common_components]
+                portfolio_filtered = portfolio_resampled[common_components]
+                benchmark_filtered = benchmark_resampled[common_components]
                 
                 # Compute active returns
                 active_matrix = portfolio_filtered - benchmark_filtered
@@ -214,7 +398,16 @@ class DataAccessService:
                 return pd.Series(dtype=float, name=f"{component_id}_volatility_{return_type}")
             
             # Calculate rolling volatility (annualized)
-            rolling_vol = returns.rolling(window=window).std() * np.sqrt(252)
+            # Adjust annualization factor based on frequency
+            freq_annualization = {
+                "D": 252,  # Daily
+                "B": 252,  # Business daily
+                "W-FRI": 52,  # Weekly
+                "M": 12   # Monthly
+            }
+            annualization_factor = freq_annualization.get(self.frequency_manager.current_frequency, 252)
+            
+            rolling_vol = returns.rolling(window=window).std() * np.sqrt(annualization_factor)
             rolling_vol.name = f"{component_id}_volatility_{return_type}"
             
             return rolling_vol.dropna()
@@ -729,7 +922,15 @@ class DataAccessService:
             if returns.empty:
                 return {}
             
-            # Calculate summary statistics
+            # Calculate summary statistics with frequency-adjusted annualization
+            freq_annualization = {
+                "D": 252,  # Daily
+                "B": 252,  # Business daily
+                "W-FRI": 52,  # Weekly
+                "M": 12   # Monthly
+            }
+            annualization_factor = freq_annualization.get(self.frequency_manager.current_frequency, 252)
+            
             summary = {
                 "mean": float(returns.mean()),
                 "std": float(returns.std()),
@@ -738,8 +939,8 @@ class DataAccessService:
                 "skew": float(returns.skew()),
                 "kurtosis": float(returns.kurtosis()),
                 "count": len(returns),
-                "annualized_return": float(returns.mean() * 252),
-                "annualized_volatility": float(returns.std() * np.sqrt(252))
+                "annualized_return": float(returns.mean() * annualization_factor),
+                "annualized_volatility": float(returns.std() * np.sqrt(annualization_factor))
             }
             
             # Sharpe ratio (if not active returns)
@@ -1128,15 +1329,18 @@ class DataAccessService:
             if factor_returns.empty:
                 return pd.DataFrame()
             
+            # Apply resampling to factor returns
+            factor_returns_resampled = self._resample_returns_dataframe(factor_returns)
+            
             if factor_names:
                 # Filter to requested factors
-                available_factors = [f for f in factor_names if f in factor_returns.columns]
+                available_factors = [f for f in factor_names if f in factor_returns_resampled.columns]
                 if available_factors:
-                    return factor_returns[available_factors].copy()
+                    return factor_returns_resampled[available_factors].copy()
                 else:
                     return pd.DataFrame()
             else:
-                return factor_returns.copy()
+                return factor_returns_resampled.copy()
             
         except Exception as e:
             logger.error(f"Error getting factor returns data: {e}")

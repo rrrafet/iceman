@@ -102,11 +102,27 @@ def run():
     # Render sidebar and get filter states
     sidebar_state = render_sidebar(config_service, data_access_service)
     
+    # Handle frequency changes
+    current_freq = data_access_service.get_current_frequency()
+    if sidebar_state.frequency != current_freq:
+        with st.spinner(f"Switching to {sidebar_state.frequency} frequency..."):
+            try:
+                success = data_access_service.set_frequency(sidebar_state.frequency)
+                if success:
+                    st.success(f"Data frequency changed to {sidebar_state.frequency}")
+                    st.info("🔄 System re-initialized with new frequency. All charts and tables now show resampled data.")
+                    # Force a rerun to refresh all data with new frequency
+                    st.rerun()
+                else:
+                    st.warning("Frequency was already set to the selected value")
+            except Exception as e:
+                st.error(f"Failed to change frequency: {e}")
+    
     # Main header
     st.title("Maverick")
     
     # Enhanced header with portfolio and risk analysis status
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
     
     with col1:
         # Portfolio info
@@ -128,6 +144,19 @@ def run():
         st.markdown(f"**Lens:** {lens.title()}")
         #currency = config_service.get_currency()
         #st.info(currency)
+    
+    with col4:
+        # Show current frequency
+        frequency_labels = {
+            "D": "Daily", 
+            "B": "Business Daily",
+            "W-FRI": "Weekly", 
+            "M": "Monthly"
+        }
+        freq_label = frequency_labels.get(sidebar_state.frequency, sidebar_state.frequency)
+        st.markdown(f"**Freq:** {freq_label}")
+        if sidebar_state.frequency not in ["D", "B"]:
+            st.caption("📈 Resampled")
     
     # Tab navigation
     tab_names = [

@@ -11,6 +11,7 @@ class SidebarState:
     selected_factors: List[str]
     annualized: bool
     show_percentage: bool
+    frequency: str
 
 def render_sidebar(config_service, data_access_service) -> SidebarState:
     """Render sidebar using 3-layer architecture services."""
@@ -89,7 +90,32 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             key="lens_selector"
         )
         
-        # st.divider()
+        st.divider()
+        
+        # Frequency selector
+        st.subheader("Data Frequency")
+        frequency_options = ["D", "B", "W-FRI", "ME"]
+        frequency_labels = {
+            "D": "Daily", 
+            "B": "Business Daily (Native)",
+            "W-FRI": "Weekly (Friday)", 
+            "ME": "Monthly"
+        }
+        
+        # Default to business daily
+        default_frequency = "B"
+        try:
+            default_frequency_index = frequency_options.index(default_frequency)
+        except ValueError:
+            default_frequency_index = 1
+        
+        selected_frequency = st.selectbox(
+            "Select data frequency",
+            options=frequency_options,
+            index=default_frequency_index,
+            format_func=lambda x: frequency_labels.get(x, x),
+            key="frequency_selector"
+        )
         
         # Factor filter  
         # st.subheader("Factor Filter")
@@ -118,5 +144,6 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         selected_risk_model=selected_risk_model,
         selected_factors=None,
         annualized=None,
-        show_percentage=None
+        show_percentage=None,
+        frequency=selected_frequency
     )
