@@ -19,13 +19,8 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from typing import List, Dict, Any, Optional
-import sys
-import os
-
-# Add parent directories for imports
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
-from utils.formatters import format_percentage
-from utils.colors import get_discrete_color_sequence
+from spark.ui.apps.maverick.utils.formatters import format_percentage
+from spark.ui.apps.maverick.utils.colors import get_discrete_color_sequence
 
 
 def render_data_explorer_tab(data_access_service, sidebar_state):

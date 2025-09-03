@@ -17,12 +17,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, Optional
-import sys
-import os
-
-# Add parent directories for imports
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
-from utils.formatters import format_basis_points, format_percentage, format_decimal
+from spark.ui.apps.maverick.utils.formatters import format_basis_points, format_percentage, format_decimal
 
 
 def render_allocation_selection_tab(data_access_service, sidebar_state):

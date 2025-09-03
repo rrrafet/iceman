@@ -1,39 +1,29 @@
 import streamlit as st
-import sys
 import os
 from pathlib import Path
+import importlib.resources as pkg_resources
 
-# Add parent directories to path for imports
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
-sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
-
-# Handle imports for both standalone and module execution
-try:
-    # Try relative imports first (when used as module)
-    from .services.configuration_service import ConfigurationService
-    from .services.risk_analysis_service import RiskAnalysisService
-    from .services.data_access_service import DataAccessService
-    from .components.sidebar import render_sidebar
-    from .components.tabs.overview import render_overview_tab
-    from .components.tabs.risk_decomposition import render_risk_decomposition_tab
-    from .components.tabs.allocation_selection import render_allocation_selection_tab
-    from .components.tabs.data_explorer import render_data_explorer_tab
-except ImportError:
-    # Fall back to absolute imports (when run standalone)
-    from services.configuration_service import ConfigurationService
-    from services.risk_analysis_service import RiskAnalysisService
-    from services.data_access_service import DataAccessService
-    from components.sidebar import render_sidebar
-    from components.tabs.overview import render_overview_tab
-    from components.tabs.risk_decomposition import render_risk_decomposition_tab
-    from components.tabs.allocation_selection import render_allocation_selection_tab
-    from components.tabs.data_explorer import render_data_explorer_tab
+# Use consistent absolute imports
+from spark.ui.apps.maverick.services.configuration_service import ConfigurationService
+from spark.ui.apps.maverick.services.risk_analysis_service import RiskAnalysisService
+from spark.ui.apps.maverick.services.data_access_service import DataAccessService
+from spark.ui.apps.maverick.components.sidebar import render_sidebar
+from spark.ui.apps.maverick.components.tabs.overview import render_overview_tab
+from spark.ui.apps.maverick.components.tabs.risk_decomposition import render_risk_decomposition_tab
+from spark.ui.apps.maverick.components.tabs.allocation_selection import render_allocation_selection_tab
+from spark.ui.apps.maverick.components.tabs.data_explorer import render_data_explorer_tab
+from spark.ui.apps.maverick.datamodels import FactorDataProvider, PortfolioDataProvider
 
 def initialize_services():
     """Initialize the 3-layer architecture services."""
     try:
-        # Get config path
-        config_path = os.path.join(os.path.dirname(__file__), 'config', 'default_config.yaml')
+        # Get config path using package resources
+        try:
+            config_path = pkg_resources.files('spark.ui.apps.maverick.config') / 'default_config.yaml'
+        except AttributeError:
+            # Fallback for Python < 3.9
+            import pkg_resources as legacy_pkg
+            config_path = legacy_pkg.resource_filename('spark.ui.apps.maverick', 'config/default_config.yaml')
         
         # Initialize configuration service
         config_service = ConfigurationService(config_path)
@@ -41,16 +31,18 @@ def initialize_services():
         # Initialize data providers
         data_sources = config_service.get_data_sources()
         
-        # Import data providers  
-        from datamodels import FactorDataProvider, PortfolioDataProvider
+        # Get data file paths using package resources
+        try:
+            factor_data_path = pkg_resources.files('spark.ui.apps.maverick') / data_sources.get('factor_returns', 'data/factor_returns.parquet')
+            portfolio_config_path = pkg_resources.files('spark.ui.apps.maverick') / data_sources.get('portfolio_config', 'graphs/strategic_portfolio.yaml')
+        except AttributeError:
+            # Fallback for Python < 3.9
+            import pkg_resources as legacy_pkg
+            factor_data_path = legacy_pkg.resource_filename('spark.ui.apps.maverick', data_sources.get('factor_returns', 'data/factor_returns.parquet'))
+            portfolio_config_path = legacy_pkg.resource_filename('spark.ui.apps.maverick', data_sources.get('portfolio_config', 'graphs/strategic_portfolio.yaml'))
         
-        factor_provider = FactorDataProvider(
-            os.path.join(os.path.dirname(__file__), data_sources.get('factor_returns', 'data/factor_returns.parquet'))
-        )
-        
-        portfolio_provider = PortfolioDataProvider(
-            os.path.join(os.path.dirname(__file__), data_sources.get('portfolio_config', 'graphs/strategic_portfolio.yaml'))
-        )
+        factor_provider = FactorDataProvider(str(factor_data_path))
+        portfolio_provider = PortfolioDataProvider(str(portfolio_config_path))
         
         # Initialize risk analysis service
         risk_analysis_service = RiskAnalysisService(

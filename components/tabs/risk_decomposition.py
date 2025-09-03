@@ -21,13 +21,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
-import sys
-import os
-
-# Add parent directories for imports
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
-from utils.formatters import format_basis_points, format_percentage, format_decimal, truncate_component_name, clean_factor_name
-from utils.colors import get_chart_color, PLOTLY_CONTINUOUS_COLORSCALE
+from spark.ui.apps.maverick.utils.formatters import format_basis_points, format_percentage, format_decimal, truncate_component_name, clean_factor_name
+from spark.ui.apps.maverick.utils.colors import get_chart_color, PLOTLY_CONTINUOUS_COLORSCALE
 
 def render_risk_decomposition_tab(data_access_service, sidebar_state):
     """

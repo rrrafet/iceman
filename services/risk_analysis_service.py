@@ -8,9 +8,9 @@ import pandas as pd
 import logging
 from datetime import datetime
 
-from datamodels import FactorDataProvider, PortfolioDataProvider, RiskModelRegistry
-from computation import RiskComputation
-from services.configuration_service import ConfigurationService
+from spark.ui.apps.maverick.datamodels import FactorDataProvider, PortfolioDataProvider, RiskModelRegistry
+from spark.ui.apps.maverick.computation import RiskComputation
+from spark.ui.apps.maverick.services.configuration_service import ConfigurationService
 
 # Import portfolio graph and related classes
 try:

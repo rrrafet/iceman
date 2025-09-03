@@ -1,12 +1,8 @@
 import pandas as pd
 import streamlit as st
 import plotly.express as px
-import sys
-import os
 
-# Add parent directories for imports
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../'))
-from utils.colors import get_chart_color
+from spark.ui.apps.maverick.utils.colors import get_chart_color
 
 def render_overview_tab(data_access_service, sidebar_state):
     """Render Tab 1 - Overview (snapshot) using 3-layer architecture services"""

@@ -1,8 +1,4 @@
 # Import color palette from spark-ui
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
-
 try:
     from spark.ui.colors import COLOR_PALETTE, PLOTLY_CONTINUOUS_COLORSCALE, PLOTLY_CONTINUOUS_COLORSCALE_BLUE_WHITE_RED
 except ImportError:
