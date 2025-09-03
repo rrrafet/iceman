@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class FrequencyManager:
     """Manages data frequency and resampling state."""
     
-    SUPPORTED_FREQUENCIES = ["D", "B", "W-FRI", "M"]
+    SUPPORTED_FREQUENCIES = ["D", "B", "W-FRI", "ME"]  # Updated to use ME instead of M
     NATIVE_FREQUENCIES = ["D", "B"]
     
     def __init__(self, native_frequency: str = "B"):
@@ -147,6 +147,16 @@ class DataAccessService:
                 if hasattr(self.risk_analysis_service.risk_computation, 'clear_cache'):
                     self.risk_analysis_service.risk_computation.clear_cache()
                     logger.info("Cleared risk computation cache")
+            
+            # CRITICAL: Update data providers with current frequency before re-initialization
+            logger.info("Updating data providers with current frequency")
+            if hasattr(self, 'portfolio_provider') and self.portfolio_provider:
+                self.portfolio_provider.set_frequency_manager(self.frequency_manager)
+                logger.info("Updated PortfolioDataProvider frequency")
+            
+            if hasattr(self, 'factor_provider') and self.factor_provider:
+                self.factor_provider.set_frequency_manager(self.frequency_manager)
+                logger.info("Updated FactorDataProvider frequency")
             
             # Re-initialize the entire system
             logger.info("Re-initializing risk analysis service")
@@ -403,7 +413,7 @@ class DataAccessService:
                 "D": 252,  # Daily
                 "B": 252,  # Business daily
                 "W-FRI": 52,  # Weekly
-                "M": 12   # Monthly
+                "ME": 12   # Monthly (month-end)
             }
             annualization_factor = freq_annualization.get(self.frequency_manager.current_frequency, 252)
             
@@ -927,7 +937,7 @@ class DataAccessService:
                 "D": 252,  # Daily
                 "B": 252,  # Business daily
                 "W-FRI": 52,  # Weekly
-                "M": 12   # Monthly
+                "ME": 12   # Monthly (month-end)
             }
             annualization_factor = freq_annualization.get(self.frequency_manager.current_frequency, 252)
             

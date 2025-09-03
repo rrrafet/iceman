@@ -37,7 +37,73 @@ class PortfolioDataProvider:
         self._data: Optional[pd.DataFrame] = None
         self._portfolio_config: Optional[Dict[str, Any]] = None
         self._portfolio_graph: Optional['PortfolioGraph'] = None
+        
+        # Frequency management for data providers
+        self.frequency_manager = None
+        self.current_frequency = "B"  # Default to business daily
+        
         self._load_config_and_build_graph()
+    
+    def set_frequency_manager(self, frequency_manager):
+        """
+        Set frequency manager to coordinate frequency with DataAccessService.
+        
+        Args:
+            frequency_manager: FrequencyManager instance from DataAccessService
+        """
+        self.frequency_manager = frequency_manager
+        if frequency_manager:
+            self.current_frequency = frequency_manager.current_frequency
+            logger.info(f"PortfolioDataProvider frequency set to: {self.current_frequency}")
+    
+    def _resample_returns_series(self, series: pd.Series) -> pd.Series:
+        """
+        Resample returns series using compound return calculation.
+        
+        Args:
+            series: Returns series to resample
+            
+        Returns:
+            Resampled series or original series if no resampling needed
+        """
+        if not self.frequency_manager or not self.frequency_manager.is_resampled or series.empty:
+            return series
+        
+        freq = self.frequency_manager.current_frequency
+        try:
+            # Use compound return calculation: (1+r).prod() - 1
+            resampled = series.resample(freq).apply(lambda x: (1 + x).prod() - 1)
+            resampled.name = series.name
+            logger.debug(f"PortfolioDataProvider resampled {series.name} from {len(series)} to {len(resampled)} observations at {freq}")
+            return resampled.dropna()
+            
+        except Exception as e:
+            logger.error(f"Error resampling series {series.name} in PortfolioDataProvider: {e}")
+            return series
+    
+    def _resample_returns_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Resample returns DataFrame using compound return calculation.
+        
+        Args:
+            df: Returns DataFrame to resample
+            
+        Returns:
+            Resampled DataFrame or original DataFrame if no resampling needed
+        """
+        if not self.frequency_manager or not self.frequency_manager.is_resampled or df.empty:
+            return df
+        
+        freq = self.frequency_manager.current_frequency
+        try:
+            # Apply compound return calculation to each column
+            resampled = df.resample(freq).apply(lambda x: (1 + x).prod() - 1)
+            logger.debug(f"PortfolioDataProvider resampled DataFrame from {len(df)} to {len(resampled)} observations at {freq}")
+            return resampled.dropna()
+            
+        except Exception as e:
+            logger.error(f"Error resampling DataFrame in PortfolioDataProvider: {e}")
+            return df
     
     def _load_config_and_build_graph(self) -> None:
         """Load YAML configuration and build PortfolioGraph."""
@@ -291,7 +357,8 @@ class PortfolioDataProvider:
                 result_series = metric_value.copy()
                 result_series.name = f"{component_id}_{return_type}"
                 logger.debug(f"Created {return_type} returns series for {component_id}: {len(result_series)} observations")
-                return result_series
+                # Apply resampling if frequency manager is set
+                return self._resample_returns_series(result_series)
             elif isinstance(metric_value, (int, float)):
                 # Scalar metric - create single-value series
                 result_series = pd.Series([metric_value], name=f"{component_id}_{return_type}")
@@ -485,7 +552,8 @@ class PortfolioDataProvider:
             
             logger.debug(f"Created {return_type} returns matrix using PortfolioGraph: {returns_matrix.shape[0]} dates, "
                         f"{returns_matrix.shape[1]} components")
-            return returns_matrix
+            # Apply resampling if frequency manager is set
+            return self._resample_returns_dataframe(returns_matrix)
             
         except Exception as e:
             logger.error(f"Failed to create {return_type} returns matrix: {e}")

@@ -29,7 +29,48 @@ class FactorDataProvider:
         """
         self.factor_returns_path = Path(factor_returns_path)
         self._data: Optional[pd.DataFrame] = None
+        
+        # Frequency management for data providers
+        self.frequency_manager = None
+        self.current_frequency = "B"  # Default to business daily
+        
         self._load_data()
+    
+    def set_frequency_manager(self, frequency_manager):
+        """
+        Set frequency manager to coordinate frequency with DataAccessService.
+        
+        Args:
+            frequency_manager: FrequencyManager instance from DataAccessService
+        """
+        self.frequency_manager = frequency_manager
+        if frequency_manager:
+            self.current_frequency = frequency_manager.current_frequency
+            logger.info(f"FactorDataProvider frequency set to: {self.current_frequency}")
+    
+    def _resample_returns_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Resample returns DataFrame using compound return calculation.
+        
+        Args:
+            df: Returns DataFrame to resample
+            
+        Returns:
+            Resampled DataFrame or original DataFrame if no resampling needed
+        """
+        if not self.frequency_manager or not self.frequency_manager.is_resampled or df.empty:
+            return df
+        
+        freq = self.frequency_manager.current_frequency
+        try:
+            # Apply compound return calculation to each column
+            resampled = df.resample(freq).apply(lambda x: (1 + x).prod() - 1)
+            logger.debug(f"FactorDataProvider resampled DataFrame from {len(df)} to {len(resampled)} observations at {freq}")
+            return resampled.dropna()
+            
+        except Exception as e:
+            logger.error(f"Error resampling DataFrame in FactorDataProvider: {e}")
+            return df
     
     def _load_data(self) -> None:
         """Load factor returns data from parquet file."""
@@ -121,7 +162,8 @@ class FactorDataProvider:
         wide_data = wide_data.fillna(0.0)
         
         logger.debug(f"Created wide factor returns: {wide_data.shape[0]} dates, {wide_data.shape[1]} factors")
-        return wide_data
+        # Apply resampling if frequency manager is set
+        return self._resample_returns_dataframe(wide_data)
     
     def get_available_risk_models(self) -> List[str]:
         """

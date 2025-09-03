@@ -151,7 +151,7 @@ def run():
             "D": "Daily", 
             "B": "Business Daily",
             "W-FRI": "Weekly", 
-            "M": "Monthly"
+            "ME": "Monthly"
         }
         freq_label = frequency_labels.get(sidebar_state.frequency, sidebar_state.frequency)
         st.markdown(f"**Freq:** {freq_label}")
