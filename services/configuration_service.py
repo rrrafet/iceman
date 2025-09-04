@@ -6,6 +6,7 @@ Manages YAML configuration loading, settings, and defaults.
 from typing import Dict, Any, List, Optional
 import yaml
 import logging
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -30,16 +31,24 @@ class ConfigurationService:
         self.config_path = Path(config_path) if config_path else None
         self._config: Dict[str, Any] = {}
         self._defaults = self._get_default_config()
+        self._base_dir: Optional[Path] = None
         
         if self.config_path and self.config_path.exists():
             self.load_config(str(self.config_path))
         else:
             logger.info("Using default configuration")
             self._config = self._defaults.copy()
+            self._initialize_base_dir()
     
     def _get_default_config(self) -> Dict[str, Any]:
         """Get default configuration structure."""
         return {
+            "paths": {
+                "base_dir": ".",
+                "config_dir": "config",
+                "data_dir": "data",
+                "graphs_dir": "graphs"
+            },
             "risk_model": {
                 "default": "macro1",
                 "available": ["macro1"]
@@ -97,6 +106,9 @@ class ConfigurationService:
             # Merge with defaults (loaded config takes precedence)
             self._config = self._merge_configs(self._defaults, loaded_config)
             self.config_path = config_path_obj
+            
+            # Initialize base directory after config is loaded
+            self._initialize_base_dir()
             
             logger.info(f"Loaded configuration from {config_path}")
             return self._config.copy()
@@ -421,6 +433,95 @@ class ConfigurationService:
             Complete configuration
         """
         return self._config.copy()
+    
+    def _initialize_base_dir(self) -> None:
+        """
+        Initialize the base directory for resource resolution.
+        Priority:
+        1. Environment variable MAVERICK_BASE_DIR
+        2. Config file paths.base_dir
+        3. Directory containing the config file
+        4. Current working directory
+        """
+        # Check environment variable first
+        env_base_dir = os.environ.get('MAVERICK_BASE_DIR')
+        if env_base_dir:
+            self._base_dir = Path(env_base_dir).resolve()
+            logger.info(f"Using base directory from environment: {self._base_dir}")
+            return
+        
+        # Check config file setting
+        config_base_dir = self._config.get('paths', {}).get('base_dir')
+        if config_base_dir:
+            # If config specifies a base_dir, resolve it relative to config file location
+            if self.config_path:
+                base = self.config_path.parent / config_base_dir
+            else:
+                base = Path(config_base_dir)
+            self._base_dir = base.resolve()
+            logger.info(f"Using base directory from config: {self._base_dir}")
+            return
+        
+        # Use config file directory if available
+        if self.config_path:
+            self._base_dir = self.config_path.parent.resolve()
+            logger.info(f"Using config file directory as base: {self._base_dir}")
+            return
+        
+        # Default to current working directory
+        self._base_dir = Path.cwd()
+        logger.info(f"Using current working directory as base: {self._base_dir}")
+    
+    def resolve_path(self, path_str: str) -> Path:
+        """
+        Resolve a path string relative to the base directory.
+        
+        Args:
+            path_str: Path string (can be absolute or relative)
+            
+        Returns:
+            Resolved absolute Path object
+        """
+        if not self._base_dir:
+            self._initialize_base_dir()
+        
+        path = Path(path_str)
+        
+        # If already absolute, return as is
+        if path.is_absolute():
+            return path
+        
+        # Otherwise resolve relative to base_dir
+        return (self._base_dir / path).resolve()
+    
+    def get_data_source_path(self, source_name: str) -> Path:
+        """
+        Get resolved path for a data source.
+        
+        Args:
+            source_name: Name of the data source (e.g., 'factor_returns', 'portfolio_config')
+            
+        Returns:
+            Resolved Path object for the data source
+        """
+        data_sources = self.get_data_sources()
+        path_str = data_sources.get(source_name)
+        
+        if not path_str:
+            raise ValueError(f"Data source '{source_name}' not found in configuration")
+        
+        return self.resolve_path(path_str)
+    
+    def get_base_dir(self) -> Path:
+        """
+        Get the base directory for resource resolution.
+        
+        Returns:
+            Base directory Path object
+        """
+        if not self._base_dir:
+            self._initialize_base_dir()
+        return self._base_dir
     
     def update_from_dict(self, updates: Dict[str, Any]) -> bool:
         """
