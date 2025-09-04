@@ -1,3 +1,12 @@
+# Path configuration for deployment flexibility
+paths:
+  # Base directory for all resources (can be overridden via MAVERICK_BASE_DIR env var)
+  base_dir: "."
+  # Subdirectories relative to base_dir
+  config_dir: "config"
+  data_dir: "data" 
+  graphs_dir: "graphs"
+
 risk_model:
   default: "macro1"
   available:
@@ -19,6 +28,7 @@ ui_defaults:
   show_top_n_assets: 8
   default_date_range: "latest_year"
 
+# Data sources - paths will be resolved relative to base_dir
 data_sources:
   portfolio_config: "graphs/strategic_portfolio.yaml"
   factor_returns: "data/factor_returns.parquet"

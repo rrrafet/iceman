@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 from pathlib import Path
-import importlib.resources as pkg_resources
 
 # Use consistent absolute imports
 from spark.ui.apps.maverick.services.configuration_service import ConfigurationService
@@ -17,30 +16,35 @@ from spark.ui.apps.maverick.datamodels import FactorDataProvider, PortfolioDataP
 def initialize_services():
     """Initialize the 3-layer architecture services."""
     try:
-        # Get config path using package resources
-        try:
-            config_path = pkg_resources.files('spark.ui.apps.maverick.config') / 'default_config.yaml'
-        except AttributeError:
-            # Fallback for Python < 3.9
-            import pkg_resources as legacy_pkg
-            config_path = legacy_pkg.resource_filename('spark.ui.apps.maverick', 'config/default_config.yaml')
+        # Determine config path - check multiple locations
+        config_locations = [
+            # Environment variable
+            os.environ.get('MAVERICK_CONFIG_PATH'),
+            # Local config directory
+            'spark-ui/spark/ui/apps/maverick/config/default_config.yaml',
+            # Relative to current directory
+            'config/default_config.yaml',
+            # Package default location
+            Path(__file__).parent / 'config' / 'default_config.yaml'
+        ]
+        
+        config_path = None
+        for location in config_locations:
+            if location and Path(location).exists():
+                config_path = location
+                break
+        
+        if not config_path:
+            raise FileNotFoundError("Could not find configuration file in any expected location")
         
         # Initialize configuration service
         config_service = ConfigurationService(config_path)
         
-        # Initialize data providers
-        data_sources = config_service.get_data_sources()
+        # Get resolved data file paths using configuration service
+        factor_data_path = config_service.get_data_source_path('factor_returns')
+        portfolio_config_path = config_service.get_data_source_path('portfolio_config')
         
-        # Get data file paths using package resources
-        try:
-            factor_data_path = pkg_resources.files('spark.ui.apps.maverick') / data_sources.get('factor_returns', 'data/factor_returns.parquet')
-            portfolio_config_path = pkg_resources.files('spark.ui.apps.maverick') / data_sources.get('portfolio_config', 'graphs/strategic_portfolio.yaml')
-        except AttributeError:
-            # Fallback for Python < 3.9
-            import pkg_resources as legacy_pkg
-            factor_data_path = legacy_pkg.resource_filename('spark.ui.apps.maverick', data_sources.get('factor_returns', 'data/factor_returns.parquet'))
-            portfolio_config_path = legacy_pkg.resource_filename('spark.ui.apps.maverick', data_sources.get('portfolio_config', 'graphs/strategic_portfolio.yaml'))
-        
+        # Initialize data providers with resolved paths
         factor_provider = FactorDataProvider(str(factor_data_path))
         portfolio_provider = PortfolioDataProvider(str(portfolio_config_path))
         
