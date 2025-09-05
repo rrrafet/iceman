@@ -1,7 +1,8 @@
 # Path configuration for deployment flexibility
 paths:
   # Base directory for all resources (can be overridden via MAVERICK_BASE_DIR env var)
-  base_dir: "."
+  # ".." means parent of config directory (the maverick app root)
+  base_dir: ".."
   # Subdirectories relative to base_dir
   config_dir: "config"
   data_dir: "data" 
