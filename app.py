@@ -2,16 +2,16 @@ import streamlit as st
 import os
 from pathlib import Path
 
-# Use consistent absolute imports
-from spark.ui.apps.maverick.services.configuration_service import ConfigurationService
-from spark.ui.apps.maverick.services.risk_analysis_service import RiskAnalysisService
-from spark.ui.apps.maverick.services.data_access_service import DataAccessService
-from spark.ui.apps.maverick.components.sidebar import render_sidebar
-from spark.ui.apps.maverick.components.tabs.overview import render_overview_tab
-from spark.ui.apps.maverick.components.tabs.risk_decomposition import render_risk_decomposition_tab
-from spark.ui.apps.maverick.components.tabs.allocation_selection import render_allocation_selection_tab
-from spark.ui.apps.maverick.components.tabs.data_explorer import render_data_explorer_tab
-from spark.ui.apps.maverick.datamodels import FactorDataProvider, PortfolioDataProvider
+# Use relative imports within maverick app
+from .services.configuration_service import ConfigurationService
+from .services.risk_analysis_service import RiskAnalysisService
+from .services.data_access_service import DataAccessService
+from .components.sidebar import render_sidebar
+from .components.tabs.overview import render_overview_tab
+from .components.tabs.risk_decomposition import render_risk_decomposition_tab
+from .components.tabs.allocation_selection import render_allocation_selection_tab
+from .components.tabs.data_explorer import render_data_explorer_tab
+from .datamodels import FactorDataProvider, PortfolioDataProvider
 
 def initialize_services():
     """Initialize the 3-layer architecture services."""

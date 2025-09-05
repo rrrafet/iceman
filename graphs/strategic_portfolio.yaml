@@ -30,26 +30,91 @@ components:
     component_type: "node"
     is_overlay: false
     name: "Total Portfolio"
-      
+
   - path: "TOTAL/EQLIKE"
     component_type: "node"
     is_overlay: false
     name: "Equity-Like Assets"
 
-  - path: "TOTAL/EQLIKE/EQDM"
+  - path: "TOTAL/EQLIKE/EQ"
+    component_type: "node"
+    is_overlay: false
+    name: "Public Equity"
+
+  - path: "TOTAL/EQLIKE/EQ/EQSE"
+    component_type: "node"
+    is_overlay: false
+    name: "Sweden Equity"
+
+  - path: "TOTAL/EQLIKE/EQ/EQSE/EQSELC"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Sweden Large Cap Equity"
+
+  - path: "TOTAL/EQLIKE/EQ/EQSE/EQSESC"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Sweden Small Cap Equity"
+
+  - path: "TOTAL/EQLIKE/EQ/EQDM"
     component_type: "node"
     is_overlay: false
     name: "Developed Markets Equity"
 
-  - path: "TOTAL/EQLIKE/EQDM/EQDMSC"
+  - path: "TOTAL/EQLIKE/EQ/EQDM/EQDMLC"
+    component_type: "leaf"
+    is_overlay: false
+    name: "DM Large Cap Equity"
+
+  - path: "TOTAL/EQLIKE/EQ/EQDM/EQDMSC"
     component_type: "leaf"
     is_overlay: false
     name: "DM Small Cap Equity"
 
-  - path: "TOTAL/EQLIKE/EQDM/EQDMLC"
+  - path: "TOTAL/EQLIKE/EQ/EQEM"
     component_type: "leaf"
     is_overlay: false
-    name: "DM Large Cap Equity"
+    name: "Emerging Markets Equity"
+
+  - path: "TOTAL/EQLIKE/HY"
+    component_type: "leaf"
+    is_overlay: false
+    name: "High Yield Bonds"
+
+  - path: "TOTAL/EQLIKE/RE"
+    component_type: "node"
+    is_overlay: false
+    name: "Real Estate"
+
+  - path: "TOTAL/EQLIKE/RE/RELI"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Listed Real Estate"
+
+  - path: "TOTAL/EQLIKE/IN"
+    component_type: "node"
+    is_overlay: false
+    name: "Infrastructure"
+
+  - path: "TOTAL/EQLIKE/IN/INLI"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Listed Infrastructure"
+
+  - path: "TOTAL/EQLIKE/PE"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Private Equity"
+
+  - path: "TOTAL/EQLIKE/HF"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Hedge Funds"
+
+  - path: "TOTAL/EQLIKE/OVL"
+    component_type: "leaf"
+    is_overlay: true
+    name: "Overlay Strategies"
 
   - path: "TOTAL/IG"
     component_type: "leaf"
@@ -61,9 +126,7 @@ components:
     is_overlay: false
     name: "Cash & Alternatives"
 
-  - path: "TOTAL/OVL"
+  - path: "TOTAL/CCY"
     component_type: "leaf"
     is_overlay: true
-    name: "Overlay Strategies"
-
-
+    name: "Currency Overlay"
