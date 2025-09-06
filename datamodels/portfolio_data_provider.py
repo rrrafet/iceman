@@ -160,6 +160,31 @@ class PortfolioDataProvider:
         logger.info(f"Loaded time series data: {len(self._data)} records, "
                    f"{self._data['component_id'].nunique()} components")
     
+    def _get_latest_component_data(self, component_id: str) -> Optional[pd.DataFrame]:
+        """
+        Get the latest data for a component from the time series data.
+        
+        Args:
+            component_id: Component identifier
+            
+        Returns:
+            DataFrame with component data or None if not found
+        """
+        if self._data is None:
+            return None
+        
+        data_structure = self._portfolio_config.get('data_structure', {})
+        component_id_col = data_structure.get('component_id_column', 'component_id')
+        
+        component_data = self._data[self._data[component_id_col] == component_id]
+        if component_data.empty:
+            logger.debug(f"No data found for component: {component_id}")
+            return None
+        
+        # Sort by date and return all data for this component
+        date_col = data_structure.get('date_column', 'date')
+        return component_data.sort_values(date_col)
+    
     def _build_portfolio_graph(self) -> None:
         """Build PortfolioGraph using Spark framework builders."""
         try:
@@ -194,20 +219,36 @@ class PortfolioDataProvider:
             # Get component definitions from YAML
             components = self._portfolio_config.get('components', [])
             
-            # Convert to format expected by from_paths
+            # Convert to format expected by from_paths and include weight data
             path_data = []
             for comp in components:
-                path_data.append({
+                component_data = self._get_latest_component_data(comp['path'])
+                
+                path_entry = {
                     'path': comp['path'],
                     'component_type': comp.get('component_type', 'leaf'),
                     'is_overlay': comp.get('is_overlay', False),
                     'name': comp.get('name', comp['path'])
-                })
+                }
+                
+                # Add weight data if available
+                if component_data is not None:
+                    data_structure = self._portfolio_config.get('data_structure', {})
+                    portfolio_weight_col = data_structure.get('portfolio_weight_column', 'portfolio_weight')
+                    benchmark_weight_col = data_structure.get('benchmark_weight_column', 'benchmark_weight')
+                    
+                    if portfolio_weight_col in component_data.columns:
+                        path_entry['portfolio_weight'] = float(component_data[portfolio_weight_col].iloc[-1])
+                    
+                    if benchmark_weight_col in component_data.columns:
+                        path_entry['benchmark_weight'] = float(component_data[benchmark_weight_col].iloc[-1])
+                
+                path_data.append(path_entry)
             
-            # Build portfolio from paths
+            # Build portfolio from paths with weight data included
             builder.from_paths(path_data)
             
-            # Assign time series data to components BEFORE building
+            # Assign time series data (returns) to components BEFORE building
             self._assign_time_series_data(builder)
             
             # Get the constructed PortfolioGraph (with time series data)
@@ -254,14 +295,7 @@ class PortfolioDataProvider:
                 # Prepare data dict for this component
                 data_dict = {}
                 
-                # Add scalar weights (latest values) and time series returns
-                if portfolio_weight_col in component_data.columns:
-                    # Use latest weight as scalar value
-                    data_dict['portfolio_weight'] = float(component_data[portfolio_weight_col].iloc[-1])
-                
-                if benchmark_weight_col in component_data.columns:
-                    # Use latest weight as scalar value
-                    data_dict['benchmark_weight'] = float(component_data[benchmark_weight_col].iloc[-1])
+                # Add time series returns only (weights are now handled by from_paths)
                 
                 if portfolio_return_col in component_data.columns:
                     # Keep returns as time series
