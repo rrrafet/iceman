@@ -1,0 +1,132 @@
+name: "Strategic Portfolio"
+description: "Long-term strategic asset allocation with equity, fixed income, and overlay positions"
+
+# Configuration for Builder
+builder_settings:
+  builder_class: "PortfolioBuilderMultiplicative"
+  allow_shorts: true
+  normalize_to_relative: true
+  proportional_renormalize: true
+  weight_reconcile_policy: "respect_children"
+  delimiter: "/"
+  root_id: "TOTAL"
+
+# Data source configuration
+data_sources:
+  portfolio_data: "data/portfolio.parquet"
+
+# DataFrame column mappings
+data_structure:
+  component_id_column: "component_id"
+  date_column: "date"
+  portfolio_weight_column: "portfolio_weight"
+  benchmark_weight_column: "benchmark_weight"
+  portfolio_return_column: "portfolio_return"
+  benchmark_return_column: "benchmark_return"
+
+# Portfolio component hierarchy for builder
+components:
+  - path: "TOTAL"
+    component_type: "node"
+    is_overlay: false
+    name: "Total Portfolio"
+
+  - path: "TOTAL/EQLIKE"
+    component_type: "node"
+    is_overlay: false
+    name: "Equity-Like Assets"
+
+  - path: "TOTAL/EQLIKE/EQ"
+    component_type: "node"
+    is_overlay: false
+    name: "Public Equity"
+
+  - path: "TOTAL/EQLIKE/EQ/EQSE"
+    component_type: "node"
+    is_overlay: false
+    name: "Sweden Equity"
+
+  - path: "TOTAL/EQLIKE/EQ/EQSE/EQSELC"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Sweden Large Cap Equity"
+
+  - path: "TOTAL/EQLIKE/EQ/EQSE/EQSESC"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Sweden Small Cap Equity"
+
+  - path: "TOTAL/EQLIKE/EQ/EQDM"
+    component_type: "node"
+    is_overlay: false
+    name: "Developed Markets Equity"
+
+  - path: "TOTAL/EQLIKE/EQ/EQDM/EQDMLC"
+    component_type: "leaf"
+    is_overlay: false
+    name: "DM Large Cap Equity"
+
+  - path: "TOTAL/EQLIKE/EQ/EQDM/EQDMSC"
+    component_type: "leaf"
+    is_overlay: false
+    name: "DM Small Cap Equity"
+
+  - path: "TOTAL/EQLIKE/EQ/EQEM"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Emerging Markets Equity"
+
+  - path: "TOTAL/EQLIKE/HY"
+    component_type: "leaf"
+    is_overlay: false
+    name: "High Yield Bonds"
+
+  - path: "TOTAL/EQLIKE/RE"
+    component_type: "node"
+    is_overlay: false
+    name: "Real Estate"
+
+  - path: "TOTAL/EQLIKE/RE/RELI"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Listed Real Estate"
+
+  - path: "TOTAL/EQLIKE/IN"
+    component_type: "node"
+    is_overlay: false
+    name: "Infrastructure"
+
+  - path: "TOTAL/EQLIKE/IN/INLI"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Listed Infrastructure"
+
+  - path: "TOTAL/EQLIKE/PE"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Private Equity"
+
+  - path: "TOTAL/EQLIKE/HF"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Hedge Funds"
+
+  - path: "TOTAL/EQLIKE/OVL"
+    component_type: "leaf"
+    is_overlay: true
+    name: "Overlay Strategies"
+
+  - path: "TOTAL/IG"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Investment Grade Bonds"
+
+  - path: "TOTAL/CA"
+    component_type: "leaf"
+    is_overlay: false
+    name: "Cash & Alternatives"
+
+  - path: "TOTAL/CCY"
+    component_type: "leaf"
+    is_overlay: true
+    name: "Currency Overlay"
