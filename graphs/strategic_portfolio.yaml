@@ -71,10 +71,10 @@ components:
     is_overlay: false
     name: "DM Small Cap Equity"
 
-  - path: "TOTAL/EQLIKE/EQ/EQEM"
-    component_type: "leaf"
-    is_overlay: false
-    name: "Emerging Markets Equity"
+  # - path: "TOTAL/EQLIKE/EQ/EQEM"
+  #   component_type: "leaf"
+  #   is_overlay: false
+  #   name: "Emerging Markets Equity"
 
   - path: "TOTAL/EQLIKE/HY"
     component_type: "leaf"

@@ -11,6 +11,7 @@ from spark.ui.apps.maverick.components.tabs.overview import render_overview_tab
 from spark.ui.apps.maverick.components.tabs.risk_decomposition import render_risk_decomposition_tab
 from spark.ui.apps.maverick.components.tabs.allocation_selection import render_allocation_selection_tab
 from spark.ui.apps.maverick.components.tabs.data_explorer import render_data_explorer_tab
+from spark.ui.apps.maverick.components.tabs.stats import render_stats_tab
 from spark.ui.apps.maverick.datamodels import FactorDataProvider, PortfolioDataProvider
 
 def initialize_services():
@@ -160,6 +161,7 @@ def run():
         "Risk Decomposition",
         "Allocation-Selection",
         "Data Explorer",
+        "Stats",
         # "Active Lens", 
         # "Hierarchy Explorer",
         # "Timeline",
@@ -190,6 +192,10 @@ def run():
     # Tab 4 - Data Explorer
     with tabs[3]:
         render_data_explorer_tab(data_access_service, sidebar_state)
+    
+    # Tab 5 - Stats
+    with tabs[4]:
+        render_stats_tab(data_access_service, sidebar_state)
 
 
 def main():
