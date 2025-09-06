@@ -1037,10 +1037,13 @@ class RiskCalculator:
         if portfolio_volatility == 0:
             return np.zeros((weights.shape[0], beta.shape[1]))
         
-        # Asset by factor contributions: B * (F @ (B^T @ w) / vol).T
+        # Asset by factor contributions: weights * beta * marginal_factor
+        # This ensures sum_i(contrib[i,k]) = factor_contributions[k]
         factor_exposure = beta.T @ weights  # K x 1
         factor_risk_contrib = factor_covar @ factor_exposure  # K x 1
-        contrib = beta * (factor_risk_contrib / portfolio_volatility).T  # N x K
+        marginal_factor = (factor_risk_contrib / portfolio_volatility).reshape(1, -1)  # 1 x K
+        weights_reshaped = weights.reshape(-1, 1)  # N x 1
+        contrib = weights_reshaped * beta * marginal_factor  # N x K
         
         return contrib
     
@@ -1429,72 +1432,63 @@ class RiskCalculator:
     @staticmethod
     def calculate_factor_level_cross_contributions(
         cross_covar: np.ndarray,
-        benchmark_beta: np.ndarray,
-        active_beta: np.ndarray,
-        active_weights: np.ndarray,
-        portfolio_weights: np.ndarray,
-        active_risk: float,
-        validate: bool = True
+        benchmark_beta: np.ndarray,   # (N, K_b)
+        active_beta: np.ndarray,      # (N, K_a)
+        active_weights: np.ndarray,   # d = w - b, shape (N,)
+        portfolio_weights: np.ndarray,# w, shape (N,)
+        active_risk: float,           # σ_TE
+        validate: bool = True,
+        normalize_to_volatility: bool = True,
+        eps: float = 1e-12,
     ) -> np.ndarray:
         """
-        Calculate factor-level cross-correlation contributions.
-        
-        This method provides cross-correlation contributions at the factor level,
-        enabling complete decomposition of the interaction term across factors.
-        
-        Parameters
-        ----------
-        cross_covar : np.ndarray
-            Cross-covariance matrix C (N x N)
-        benchmark_beta : np.ndarray
-            Benchmark factor loadings matrix (N x K)
-        active_beta : np.ndarray
-            Active factor loadings matrix (N x K)
-        active_weights : np.ndarray
-            Active weights d = portfolio - benchmark (N,)
-        portfolio_weights : np.ndarray
-            Portfolio weights w (N,)
-        active_risk : float
-            Total active risk (volatility)
-        validate : bool, default True
-            Whether to validate inputs
-            
-        Returns
-        -------
-        np.ndarray
-            Factor-level cross-correlation contributions (K,)
+        Factor-level contributions of the cross *covariance* term.
+        Returns a length-K_b vector c such that sum(c) == (2 f_b^T F_ba f_a) / σ if
+        normalize_to_volatility=True, else sum(c) == 2 f_b^T F_ba f_a.
+
+            f_b = B_b^T d,   f_a = B_a^T w,
+            F_ba = B_b^T cross_covar B_a
         """
+        d = np.asarray(active_weights, dtype=float).reshape(-1, 1)   # (N,1)
+        w = np.asarray(portfolio_weights, dtype=float).reshape(-1, 1)
+
         if validate:
+            if cross_covar.ndim != 2 or cross_covar.shape[0] != cross_covar.shape[1]:
+                raise ValueError("cross_covar must be square (N x N).")
+            N = cross_covar.shape[0]
+            if benchmark_beta.shape[0] != N or active_beta.shape[0] != N:
+                raise ValueError("beta matrices must have N rows matching cross_covar.")
+            if d.shape[0] != N or w.shape[0] != N:
+                raise ValueError("weights must have length N.")
+            for name, arr in [
+                ("cross_covar", cross_covar),
+                ("benchmark_beta", benchmark_beta),
+                ("active_beta", active_beta),
+                ("active_weights", d),
+                ("portfolio_weights", w),
+            ]:
+                if not np.all(np.isfinite(arr)):
+                    raise ValueError(f"All {name} values must be finite.")
             if not np.isfinite(active_risk):
-                raise ValueError(f"active_risk must be finite, got {active_risk}")
-            if not np.all(np.isfinite(cross_covar)):
-                raise ValueError("All cross_covar values must be finite")
-            if not np.all(np.isfinite(benchmark_beta)):
-                raise ValueError("All benchmark_beta values must be finite")
-            if not np.all(np.isfinite(active_beta)):
-                raise ValueError("All active_beta values must be finite")
-            if not np.all(np.isfinite(active_weights)):
-                raise ValueError("All active_weights must be finite")
-            if not np.all(np.isfinite(portfolio_weights)):
-                raise ValueError("All portfolio_weights must be finite")
-        
-        active_weights = np.asarray(active_weights).reshape(-1, 1)
-        portfolio_weights = np.asarray(portfolio_weights).reshape(-1, 1)
-        
-        if active_risk == 0:
-            return np.zeros(benchmark_beta.shape[1])
-        
-        # Factor-level cross-correlation: f_benchmark^T * (B_benchmark^T * C * B_active) * f_active / σ
-        benchmark_factor_exp = benchmark_beta.T @ active_weights  # K x 1
-        active_factor_exp = active_beta.T @ portfolio_weights  # K x 1
-        
-        # Cross-factor covariance matrix: B_benchmark^T * C * B_active (K x K)
-        cross_factor_covar = benchmark_beta.T @ cross_covar @ active_beta
-        
-        # Factor contributions: 2 * f_benchmark * (cross_factor_covar * f_active) / σ
-        factor_cross_contrib = 2.0 * benchmark_factor_exp.flatten() * (cross_factor_covar @ active_factor_exp).flatten()
-        
-        return factor_cross_contrib / active_risk
+                raise ValueError(f"active_risk must be finite, got {active_risk}.")
+
+        sigma = float(active_risk)
+        if not np.isfinite(sigma) or sigma <= eps:
+            # No volatility to allocate (or numerically unstable) → zero vector
+            return np.zeros(benchmark_beta.shape[1], dtype=float)
+
+        # f_b = B_b^T d  (K_b x 1), f_a = B_a^T w  (K_a x 1)
+        f_b = benchmark_beta.T @ d
+        f_a = active_beta.T @ w
+
+        # F_ba = B_b^T C B_a  (K_b x K_a)
+        F_ba = benchmark_beta.T @ cross_covar @ active_beta
+
+        # Per-factor (benchmark-basis) variance contributions: 2 * f_b ⊙ (F_ba f_a)
+        contrib_var = 2.0 * (f_b.squeeze() * (F_ba @ f_a).squeeze())  # (K_b,)
+
+        return contrib_var / sigma if normalize_to_volatility else contrib_var
+
     
     @staticmethod
     def calculate_cross_correlation_marginal_contributions(

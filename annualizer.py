@@ -10,6 +10,7 @@ annualized form when needed for reporting.
 import numpy as np
 from typing import Dict, Any
 from spark.core.mappers import frequency_to_multiplier
+from spark.ui.apps.maverick.datamodels import factor_data_provider
 
 
 class RiskAnnualizer:
@@ -131,6 +132,7 @@ class RiskAnnualizer:
             'marginal_factor_contributions',
             'asset_total_contributions',
             'asset_factor_contributions',
+            'asset_by_factor_contributions',
             'asset_specific_contributions',
             'marginal_asset_contributions',
             'asset_allocation_factor_contributions',
