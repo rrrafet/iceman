@@ -31,7 +31,6 @@ The system follows a clean 3-layer architecture pattern:
 - **Comparison Tools**: Component-to-component risk and return comparisons
 
 ### Data Integration
-- **Mock Data Generation**: Realistic synthetic data for testing and development
 - **Parquet File Support**: Efficient data storage and retrieval
 - **Hierarchical Portfolio Structure**: Full support for complex portfolio hierarchies
 - **Multiple Risk Models**: Extensible risk model registry system
@@ -62,8 +61,7 @@ spark/ui/apps/maverick/
 │   └── default_config.yaml
 ├── data/                   # Data files
 │   ├── factor_returns.parquet
-│   ├── portfolio.parquet
-│   └── create_mock_data.py
+│   └── portfolio.parquet
 ├── main.py                 # Demonstration script
 └── README.md               # This file
 ```
@@ -76,13 +74,7 @@ cd /Users/rafet/Workspace/Spark/spark-ui
 PYTHONPATH=/Users/rafet/Workspace/Spark/spark-ui:/Users/rafet/Workspace/Spark python -m spark.ui.apps.maverick.main
 ```
 
-### 2. Generate New Mock Data
-```bash
-cd /Users/rafet/Workspace/Spark/spark-ui/spark/ui/apps/maverick/data
-python create_mock_data.py
-```
-
-### 3. Use Individual Components
+### 2. Use Individual Components
 ```python
 from spark.ui.apps.maverick.datamodels import FactorDataProvider
 from spark.ui.apps.maverick.services import ConfigurationService, DataAccessService
@@ -106,10 +98,10 @@ The system is designed to integrate seamlessly with the existing Spark portfolio
 - **RiskResult Compatibility**: Uses the simplified RiskResult dataclass
 - **MetricStore Integration**: Compatible with existing metric storage systems
 
-### Mock vs. Production Integration
-The current implementation includes mock classes for demonstration purposes. For production use:
+### Production Integration
+For production use:
 
-1. Replace `MockRiskComputation` with actual `RiskComputation` using real visitor
+1. Implement actual `RiskComputation` using real visitor
 2. Implement proper portfolio graph construction from data
 3. Connect to actual risk decomposition visitor execution
 4. Add comprehensive error handling and validation
@@ -192,7 +184,7 @@ The demonstration script successfully validates:
 ✅ **Computation Layer**: Risk decomposition orchestration  
 ✅ **Service Layer**: Configuration, risk analysis, and data access services  
 ✅ **UI-friendly Data Access**: Time series, risk metrics, hierarchical analysis  
-✅ **Mock Data Integration**: Realistic factor returns and portfolio data  
+✅ **Data Integration**: Factor returns and portfolio data  
 ✅ **Complete System Architecture**: Clean separation of concerns  
 
 ## Performance Characteristics
@@ -204,7 +196,7 @@ The demonstration script successfully validates:
 
 ## Next Steps for Production
 
-1. **Full Framework Integration**: Replace mock implementations with actual Spark components
+1. **Full Framework Integration**: Implement production Spark components
 2. **Performance Optimization**: Add caching, connection pooling, and batch processing
 3. **Error Handling**: Comprehensive validation and graceful error recovery
 4. **Documentation**: Complete API documentation and user guides

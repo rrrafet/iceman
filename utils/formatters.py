@@ -3,6 +3,8 @@ Utility functions for data formatting and display
 """
 from typing import Union, List, Dict, Any
 
+from spark.risk.annualizer import RiskAnnualizer
+
 def format_percentage(value: float, decimal_places: int = 2) -> str:
     """Format value as percentage with specified decimal places"""
     return f"{value:.{decimal_places}f}%"
@@ -61,15 +63,20 @@ def get_risk_level_badge(risk_value: float, thresholds: Dict[str, float] = None)
     else:
         return "error", "High Risk"
 
-def format_date_range_label(start_idx: int, end_idx: int, total_periods: int) -> str:
+def format_date_range_label(start_idx: int, end_idx: int, total_periods: int, frequency: str = "D") -> str:
     """Format date range for display"""
     periods = end_idx - start_idx + 1
     if start_idx == 0 and end_idx == total_periods - 1:
         return "Full Range"
-    elif periods <= 252:  # Roughly 1 year
+    
+    periods_per_year = RiskAnnualizer.get_periods_per_year(frequency)
+    one_year_periods = int(periods_per_year)
+    three_year_periods = int(3 * periods_per_year)
+    
+    if periods <= one_year_periods:  # Roughly 1 year
         return f"Last {periods} periods"
-    elif periods <= 756:  # Roughly 3 years
-        return f"Last ~{periods//252} years"
+    elif periods <= three_year_periods:  # Roughly 3 years
+        return f"Last ~{periods//one_year_periods} years"
     else:
         return f"{periods} periods"
 

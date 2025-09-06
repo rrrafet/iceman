@@ -26,17 +26,19 @@ class PortfolioDataProvider:
     using Spark framework builders.
     """
     
-    def __init__(self, portfolio_yaml_path: str):
+    def __init__(self, portfolio_yaml_path: str, strict_mode: bool = False):
         """
         Initialize portfolio data provider from YAML configuration.
         
         Args:
             portfolio_yaml_path: Path to portfolio YAML configuration file
+            strict_mode: If True, fail when components are missing in data. If False, skip with warning.
         """
         self.portfolio_yaml_path = Path(portfolio_yaml_path)
         self._data: Optional[pd.DataFrame] = None
         self._portfolio_config: Optional[Dict[str, Any]] = None
         self._portfolio_graph: Optional['PortfolioGraph'] = None
+        self.strict_mode = strict_mode
         
         # Frequency management for data providers
         self.frequency_manager = None
@@ -160,9 +162,95 @@ class PortfolioDataProvider:
         logger.info(f"Loaded time series data: {len(self._data)} records, "
                    f"{self._data['component_id'].nunique()} components")
     
+    def _validate_component_mapping(self) -> Dict[str, Any]:
+        """
+        Validate that all components defined in YAML exist in the data.
+        
+        Returns:
+            Dictionary with validation results including missing components
+        """
+        validation_result = {
+            "valid": True,
+            "missing_components": [],
+            "found_components": [],
+            "data_components": [],
+            "warnings": []
+        }
+        
+        if self._data is None:
+            validation_result["valid"] = False
+            validation_result["warnings"].append("No data loaded")
+            return validation_result
+        
+        # Get all unique component_ids from the data
+        data_structure = self._portfolio_config.get('data_structure', {})
+        component_id_col = data_structure.get('component_id_column', 'component_id')
+        data_components = set(self._data[component_id_col].unique())
+        validation_result["data_components"] = sorted(list(data_components))
+        
+        # Check each component defined in YAML
+        components = self._portfolio_config.get('components', [])
+        for comp in components:
+            component_path = comp['path']
+            if component_path in data_components:
+                validation_result["found_components"].append(component_path)
+            else:
+                validation_result["missing_components"].append(component_path)
+                logger.warning(f"Component '{component_path}' defined in YAML but not found in data")
+        
+        # Check if we have any missing components
+        if validation_result["missing_components"]:
+            validation_result["valid"] = False
+            missing_count = len(validation_result["missing_components"])
+            total_count = len(components)
+            
+            logger.warning(f"Missing {missing_count}/{total_count} components from data file")
+            logger.warning(f"Missing components: {validation_result['missing_components'][:5]}{'...' if missing_count > 5 else ''}")
+            logger.info(f"Available components in data: {sorted(list(data_components))[:10]}{'...' if len(data_components) > 10 else ''}")
+            
+            if self.strict_mode:
+                raise ValueError(
+                    f"Missing {missing_count} components in portfolio data. "
+                    f"Missing: {validation_result['missing_components'][:3]}... "
+                    f"Set strict_mode=False to skip missing components."
+                )
+        
+        return validation_result
+    
+    def _get_latest_component_data(self, component_id: str) -> Optional[pd.DataFrame]:
+        """
+        Get the latest data for a component from the time series data.
+        
+        Args:
+            component_id: Component identifier
+            
+        Returns:
+            DataFrame with component data or None if not found
+        """
+        if self._data is None:
+            return None
+        
+        data_structure = self._portfolio_config.get('data_structure', {})
+        component_id_col = data_structure.get('component_id_column', 'component_id')
+        
+        component_data = self._data[self._data[component_id_col] == component_id]
+        if component_data.empty:
+            logger.debug(f"No data found for component: {component_id}")
+            return None
+        
+        # Sort by date and return all data for this component
+        date_col = data_structure.get('date_column', 'date')
+        return component_data.sort_values(date_col)
+    
     def _build_portfolio_graph(self) -> None:
         """Build PortfolioGraph using Spark framework builders."""
         try:
+            # Validate component mapping first
+            validation_result = self._validate_component_mapping()
+            if not validation_result["valid"] and self.strict_mode:
+                # Validation will have already raised an error in strict mode
+                return
+            
             # Import Spark framework classes
             from spark.portfolio.graph import PortfolioGraph
             from spark.portfolio.builders import PortfolioBuilder
@@ -194,20 +282,47 @@ class PortfolioDataProvider:
             # Get component definitions from YAML
             components = self._portfolio_config.get('components', [])
             
-            # Convert to format expected by from_paths
+            # Convert to format expected by from_paths and include weight data
             path_data = []
+            skipped_components = []
+            
             for comp in components:
-                path_data.append({
+                component_data = self._get_latest_component_data(comp['path'])
+                
+                # Skip components with no data if not in strict mode
+                if component_data is None and not self.strict_mode:
+                    skipped_components.append(comp['path'])
+                    logger.debug(f"Skipping component '{comp['path']}' - no data available")
+                    continue
+                
+                path_entry = {
                     'path': comp['path'],
                     'component_type': comp.get('component_type', 'leaf'),
                     'is_overlay': comp.get('is_overlay', False),
                     'name': comp.get('name', comp['path'])
-                })
+                }
+                
+                # Add weight data if available
+                if component_data is not None:
+                    data_structure = self._portfolio_config.get('data_structure', {})
+                    portfolio_weight_col = data_structure.get('portfolio_weight_column', 'portfolio_weight')
+                    benchmark_weight_col = data_structure.get('benchmark_weight_column', 'benchmark_weight')
+                    
+                    if portfolio_weight_col in component_data.columns:
+                        path_entry['portfolio_weight'] = float(component_data[portfolio_weight_col].iloc[-1])
+                    
+                    if benchmark_weight_col in component_data.columns:
+                        path_entry['benchmark_weight'] = float(component_data[benchmark_weight_col].iloc[-1])
+                
+                path_data.append(path_entry)
             
-            # Build portfolio from paths
+            if skipped_components:
+                logger.warning(f"Skipped {len(skipped_components)} components without data: {skipped_components[:5]}{'...' if len(skipped_components) > 5 else ''}")
+            
+            # Build portfolio from paths with weight data included
             builder.from_paths(path_data)
             
-            # Assign time series data to components BEFORE building
+            # Assign time series data (returns) to components BEFORE building
             self._assign_time_series_data(builder)
             
             # Get the constructed PortfolioGraph (with time series data)
@@ -254,14 +369,7 @@ class PortfolioDataProvider:
                 # Prepare data dict for this component
                 data_dict = {}
                 
-                # Add scalar weights (latest values) and time series returns
-                if portfolio_weight_col in component_data.columns:
-                    # Use latest weight as scalar value
-                    data_dict['portfolio_weight'] = float(component_data[portfolio_weight_col].iloc[-1])
-                
-                if benchmark_weight_col in component_data.columns:
-                    # Use latest weight as scalar value
-                    data_dict['benchmark_weight'] = float(component_data[benchmark_weight_col].iloc[-1])
+                # Add time series returns only (weights are now handled by from_paths)
                 
                 if portfolio_return_col in component_data.columns:
                     # Keep returns as time series
@@ -273,8 +381,13 @@ class PortfolioDataProvider:
                 
                 # Use builder's add_data method to assign time series data
                 if data_dict:
-                    builder.add_data(component_id, data_dict)
-                    logger.debug(f"Assigned time series data for component: {component_id}")
+                    try:
+                        builder.add_data(component_id, data_dict)
+                        logger.debug(f"Assigned time series data for component: {component_id}")
+                    except Exception as e:
+                        if self.strict_mode:
+                            raise
+                        logger.warning(f"Failed to assign data for component '{component_id}': {e}")
             
             logger.info("Time series data assignment completed")
             

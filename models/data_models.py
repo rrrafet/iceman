@@ -8,6 +8,8 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import pandas as pd
 
+from spark.risk.annualizer import RiskAnnualizer
+
 
 @dataclass
 class ComponentSummary:
@@ -80,6 +82,7 @@ class TimeSeriesData:
     data_type: str  # 'returns', 'cumulative_returns', 'volatility'
     return_type: str  # 'portfolio', 'benchmark', 'active'
     series: pd.Series
+    frequency: str = "D"  # Data frequency for annualization
     
     # Summary statistics
     mean: Optional[float] = None
@@ -111,10 +114,14 @@ class TimeSeriesData:
                 self.start_date = self.series.index.min().to_pydatetime()
                 self.end_date = self.series.index.max().to_pydatetime()
             
-            # Annualized metrics (assuming daily data)
+            # Annualized metrics
             if self.data_type == 'returns' and self.std:
-                self.annualized_return = self.mean * 252
-                self.annualized_volatility = self.std * (252 ** 0.5)
+                self.annualized_return = RiskAnnualizer.annualize_return(
+                    self.mean, self.frequency
+                )
+                self.annualized_volatility = RiskAnnualizer.annualize_volatility(
+                    self.std, self.frequency
+                )
                 
                 if self.return_type != 'active' and self.annualized_volatility > 0:
                     self.sharpe_ratio = self.annualized_return / self.annualized_volatility

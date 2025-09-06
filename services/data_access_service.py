@@ -10,6 +10,7 @@ from datetime import datetime
 import logging
 
 from spark.ui.apps.maverick.services.risk_analysis_service import RiskAnalysisService
+from spark.risk.annualizer import RiskAnnualizer
 
 logger = logging.getLogger(__name__)
 
@@ -408,16 +409,11 @@ class DataAccessService:
                 return pd.Series(dtype=float, name=f"{component_id}_volatility_{return_type}")
             
             # Calculate rolling volatility (annualized)
-            # Adjust annualization factor based on frequency
-            freq_annualization = {
-                "D": 252,  # Daily
-                "B": 252,  # Business daily
-                "W-FRI": 52,  # Weekly
-                "ME": 12   # Monthly (month-end)
-            }
-            annualization_factor = freq_annualization.get(self.frequency_manager.current_frequency, 252)
-            
-            rolling_vol = returns.rolling(window=window).std() * np.sqrt(annualization_factor)
+            rolling_vol = returns.rolling(window=window).std()
+            annualization_multiplier = RiskAnnualizer.get_annualization_multiplier(
+                self.frequency_manager.current_frequency
+            )
+            rolling_vol = rolling_vol * annualization_multiplier
             rolling_vol.name = f"{component_id}_volatility_{return_type}"
             
             return rolling_vol.dropna()
@@ -932,25 +928,24 @@ class DataAccessService:
             if returns.empty:
                 return {}
             
-            # Calculate summary statistics with frequency-adjusted annualization
-            freq_annualization = {
-                "D": 252,  # Daily
-                "B": 252,  # Business daily
-                "W-FRI": 52,  # Weekly
-                "ME": 12   # Monthly (month-end)
-            }
-            annualization_factor = freq_annualization.get(self.frequency_manager.current_frequency, 252)
+            # Calculate summary statistics with annualization
+            mean_return = float(returns.mean())
+            std_return = float(returns.std())
             
             summary = {
-                "mean": float(returns.mean()),
-                "std": float(returns.std()),
+                "mean": mean_return,
+                "std": std_return,
                 "min": float(returns.min()),
                 "max": float(returns.max()),
                 "skew": float(returns.skew()),
                 "kurtosis": float(returns.kurtosis()),
                 "count": len(returns),
-                "annualized_return": float(returns.mean() * annualization_factor),
-                "annualized_volatility": float(returns.std() * np.sqrt(annualization_factor))
+                "annualized_return": float(RiskAnnualizer.annualize_return(
+                    mean_return, self.frequency_manager.current_frequency
+                )),
+                "annualized_volatility": float(RiskAnnualizer.annualize_volatility(
+                    std_return, self.frequency_manager.current_frequency
+                ))
             }
             
             # Sharpe ratio (if not active returns)
@@ -1393,6 +1388,225 @@ class DataAccessService:
             
         except Exception as e:
             logger.error(f"Error getting descendant leaf IDs for {component_id}: {e}")
+            return []
+    
+    def get_weights_relative_to_root(self, component_id: str) -> Dict[str, float]:
+        """
+        Get weights for a component relative to the root component.
+        
+        Args:
+            component_id: Component identifier
+            
+        Returns:
+            Dictionary with portfolio, benchmark, and active weights relative to root
+        """
+        try:
+            # Get the root component ID
+            root_id = self.risk_analysis_service.config_service.get_root_component_id()
+            
+            # If this is the root, return 100% weights
+            if component_id == root_id:
+                return {"portfolio": 1.0, "benchmark": 1.0, "active": 0.0}
+            
+            # Get path from component to root
+            portfolio_graph = self.risk_analysis_service.get_portfolio_graph()
+            if not portfolio_graph:
+                logger.warning(f"Portfolio graph not available for weight calculation")
+                return {"portfolio": 0.0, "benchmark": 0.0, "active": 0.0}
+            
+            # Use PortfolioGraph's existing relative_to='root' functionality
+            portfolio_weights = portfolio_graph.portfolio_weights(component_id, relative_to='root')
+            benchmark_weights = portfolio_graph.benchmark_weights(component_id, relative_to='root')
+            
+            # Get the specific weight for this component
+            portfolio_weight = portfolio_weights.get(component_id, 0.0)
+            benchmark_weight = benchmark_weights.get(component_id, 0.0)
+            
+            return {
+                "portfolio": portfolio_weight,
+                "benchmark": benchmark_weight,
+                "active": portfolio_weight - benchmark_weight
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting weights relative to root for {component_id}: {e}")
+            return {"portfolio": 0.0, "benchmark": 0.0, "active": 0.0}
+    
+    def get_computed_return_stats(self, component_id: str, lens: str) -> Dict[str, float]:
+        """
+        Get return statistics computed through the PortfolioGraph/risk computation.
+        
+        Args:
+            component_id: Component identifier
+            lens: Risk lens ('portfolio', 'benchmark', 'active')
+            
+        Returns:
+            Dictionary with mean and standard deviation from computed metrics
+        """
+        try:
+            # Get risk decomposition which contains computed volatility
+            risk_data = self.get_risk_decomposition(component_id, lens)
+            
+            # Get the volatility (standard deviation) from risk computation
+            total_risk = risk_data.get("total_risk", 0.0)  # This is annualized volatility
+            
+            # For mean, we need to get it from the risk computation or metric store
+            # The risk computation focuses on risk (volatility) not returns
+            # So we'll use the raw returns for now and mark this for future enhancement
+            
+            return {
+                "mean": np.nan,  # Computed mean not available from risk decomposition
+                "std": total_risk,  # Total risk is the computed volatility
+                "source": "computed"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting computed return stats for {component_id}/{lens}: {e}")
+            return {"mean": np.nan, "std": np.nan, "source": "computed"}
+    
+    def get_raw_return_stats(self, component_id: str, lens: str) -> Dict[str, float]:
+        """
+        Get return statistics from raw time series data.
+        
+        Args:
+            component_id: Component identifier
+            lens: Risk lens ('portfolio', 'benchmark', 'active')
+            
+        Returns:
+            Dictionary with mean and standard deviation from raw time series
+        """
+        try:
+            # Get the appropriate returns based on lens
+            if lens == 'portfolio':
+                returns = self.get_portfolio_returns(component_id)
+            elif lens == 'benchmark':
+                returns = self.get_benchmark_returns(component_id)
+            elif lens == 'active':
+                returns = self.get_active_returns(component_id)
+            else:
+                return {"mean": np.nan, "std": np.nan, "source": "raw"}
+            
+            if returns.empty:
+                return {"mean": np.nan, "std": np.nan, "source": "raw"}
+            
+            # Calculate annualized statistics
+            mean_return = float(RiskAnnualizer.annualize_return(
+                returns.mean(), self.frequency_manager.current_frequency
+            ))
+            std_return = float(RiskAnnualizer.annualize_volatility(
+                returns.std(), self.frequency_manager.current_frequency
+            ))
+            
+            return {
+                "mean": mean_return,
+                "std": std_return,
+                "source": "raw"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting raw return stats for {component_id}/{lens}: {e}")
+            return {"mean": np.nan, "std": np.nan, "source": "raw"}
+    
+    def get_component_stats(self, component_id: str) -> Dict[str, Any]:
+        """
+        Get comprehensive statistics for a single component.
+        
+        Args:
+            component_id: Component identifier
+            
+        Returns:
+            Dictionary with all statistics for the component including:
+            - Component ID and name
+            - Weights (portfolio, benchmark, active) relative to root
+            - Computed statistics (mean, std) for each lens
+            - Raw time series statistics (mean, std) for each lens
+        """
+        try:
+            # Get weights relative to root
+            weights = self.get_weights_relative_to_root(component_id)
+            
+            # Get computed statistics for each lens
+            computed_stats = {
+                "portfolio": self.get_computed_return_stats(component_id, "portfolio"),
+                "benchmark": self.get_computed_return_stats(component_id, "benchmark"),
+                "active": self.get_computed_return_stats(component_id, "active")
+            }
+            
+            # Get raw time series statistics for each lens
+            raw_stats = {
+                "portfolio": self.get_raw_return_stats(component_id, "portfolio"),
+                "benchmark": self.get_raw_return_stats(component_id, "benchmark"),
+                "active": self.get_raw_return_stats(component_id, "active")
+            }
+            
+            # Check if this is a leaf or node
+            children = self.portfolio_provider.get_component_children(component_id)
+            is_leaf = len(children) == 0
+            
+            return {
+                "component_id": component_id,
+                "is_leaf": is_leaf,
+                "weights": weights,
+                "computed_stats": computed_stats,
+                "raw_stats": raw_stats
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting component stats for {component_id}: {e}")
+            return {
+                "component_id": component_id,
+                "is_leaf": True,
+                "weights": {"portfolio": 0.0, "benchmark": 0.0, "active": 0.0},
+                "computed_stats": {
+                    "portfolio": {"mean": np.nan, "std": np.nan, "source": "computed"},
+                    "benchmark": {"mean": np.nan, "std": np.nan, "source": "computed"},
+                    "active": {"mean": np.nan, "std": np.nan, "source": "computed"}
+                },
+                "raw_stats": {
+                    "portfolio": {"mean": np.nan, "std": np.nan, "source": "raw"},
+                    "benchmark": {"mean": np.nan, "std": np.nan, "source": "raw"},
+                    "active": {"mean": np.nan, "std": np.nan, "source": "raw"}
+                }
+            }
+    
+    def get_hierarchical_stats(self, root_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get hierarchical statistics for the entire portfolio tree.
+        
+        Args:
+            root_id: Root component ID (if None, uses default from config)
+            
+        Returns:
+            List of dictionaries with statistics for each component in hierarchical order
+        """
+        try:
+            # Get root ID if not provided
+            if root_id is None:
+                root_id = self.risk_analysis_service.config_service.get_root_component_id()
+            
+            # Build hierarchical list
+            stats_list = []
+            
+            def process_component(component_id: str, level: int = 0):
+                """Recursively process component and its children."""
+                # Get stats for this component
+                stats = self.get_component_stats(component_id)
+                stats["level"] = level  # Add hierarchy level for indentation
+                stats_list.append(stats)
+                
+                # Process children
+                children = self.portfolio_provider.get_component_children(component_id)
+                for child_id in sorted(children):  # Sort for consistent ordering
+                    process_component(child_id, level + 1)
+            
+            # Start from root
+            process_component(root_id)
+            
+            logger.info(f"Generated hierarchical stats for {len(stats_list)} components")
+            return stats_list
+            
+        except Exception as e:
+            logger.error(f"Error getting hierarchical stats: {e}")
             return []
     
     def riskresult_to_brinson_table(self, risk_result: Dict[str, Any], leaf_ids: List[str]) -> pd.DataFrame:
