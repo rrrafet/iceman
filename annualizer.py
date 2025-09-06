@@ -23,29 +23,35 @@ class RiskAnnualizer:
     
     @staticmethod
     def annualize_volatility(
-        volatility: float, 
+        volatility, 
         frequency: str = "D"
-    ) -> float:
+    ):
         """
         Convert raw volatility to annualized form.
         
         Parameters
         ----------
-        volatility : float
+        volatility : float, numpy.ndarray, or pandas.Series
             Raw (non-annualized) volatility
         frequency : str, default "D"
             Data frequency for annualization
             
         Returns
         -------
-        float
-            Annualized volatility
+        float, numpy.ndarray, or pandas.Series
+            Annualized volatility (same type as input)
         """
-        if volatility == 0:
-            return 0.0
-            
-        multiplier = frequency_to_multiplier.get(frequency.upper(), 1.0)
-        return volatility * np.sqrt(multiplier)
+        # Handle zero values
+        if hasattr(volatility, '__iter__'):
+            # For arrays/Series, use vectorized operations
+            multiplier = frequency_to_multiplier.get(frequency.upper(), 1.0)
+            return volatility * np.sqrt(multiplier)
+        else:
+            # For scalars
+            if volatility == 0:
+                return 0.0
+            multiplier = frequency_to_multiplier.get(frequency.upper(), 1.0)
+            return volatility * np.sqrt(multiplier)
     
     @staticmethod
     def annualize_contributions(
@@ -213,3 +219,68 @@ class RiskAnnualizer:
         """
         multiplier = frequency_to_multiplier.get(frequency.upper(), 1.0)
         return np.sqrt(multiplier)
+    
+    @staticmethod
+    def annualize_return(
+        mean_return: float,
+        frequency: str = "D"
+    ) -> float:
+        """
+        Convert raw mean return to annualized form.
+        
+        Parameters
+        ----------
+        mean_return : float
+            Raw (non-annualized) mean return
+        frequency : str, default "D"
+            Data frequency for annualization
+            
+        Returns
+        -------
+        float
+            Annualized return
+        """
+        multiplier = frequency_to_multiplier.get(frequency.upper(), 1.0)
+        return mean_return * multiplier
+    
+    @staticmethod
+    def de_annualize_return(
+        annualized_return: float,
+        frequency: str = "D"
+    ) -> float:
+        """
+        Convert annualized return back to raw form.
+        
+        Parameters
+        ----------
+        annualized_return : float
+            Annualized return
+        frequency : str, default "D"
+            Data frequency used for original annualization
+            
+        Returns
+        -------
+        float
+            Raw (non-annualized) return
+        """
+        multiplier = frequency_to_multiplier.get(frequency.upper(), 1.0)
+        return annualized_return / multiplier
+    
+    @staticmethod
+    def get_periods_per_year(frequency: str = "D") -> float:
+        """
+        Get the number of periods per year for a given frequency.
+        
+        This is useful for display formatting and time period calculations.
+        
+        Parameters
+        ----------
+        frequency : str, default "D"
+            Data frequency
+            
+        Returns
+        -------
+        float
+            Number of periods per year
+        """
+        return frequency_to_multiplier.get(frequency.upper(), 1.0)
