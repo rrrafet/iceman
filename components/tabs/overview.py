@@ -2,7 +2,7 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 
-from spark.ui.apps.maverick.utils.colors import get_chart_color
+from utils.colors import get_chart_color
 
 def render_overview_tab(data_access_service, sidebar_state):
     """Render Tab 1 - Overview (snapshot) using 3-layer architecture services"""

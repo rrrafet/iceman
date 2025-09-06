@@ -47,7 +47,7 @@ class ModelMetadata(BaseModel):
     @classmethod
     def validate_frequency(cls, v):
         """Validate frequency against supported pandas frequencies."""
-        from spark.core.mappers import frequency_to_multiplier
+        from core.mappers import frequency_to_multiplier
         
         if v not in frequency_to_multiplier:
             supported = list(frequency_to_multiplier.keys())

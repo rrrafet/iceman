@@ -1,6 +1,6 @@
 import pandas as pd
 from typing import Union, List, Dict, Any, Optional
-from spark.risk.model_definitions import RiskModelDefinition
+from risk.model_definitions import RiskModelDefinition
 
 
 def bloomberg_factor_returns(
@@ -28,7 +28,7 @@ def bloomberg_factor_returns(
     # Handle different input types
     if isinstance(model, str):
         # Model name - get from registry
-        from spark.risk.definition import get_model
+        from risk.definition import get_model
         model_def = get_model(model)
         factors_list = [
             {

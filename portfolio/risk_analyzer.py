@@ -20,8 +20,8 @@ import logging
 if TYPE_CHECKING:
     from .graph import PortfolioGraph
     from .visitors import FactorRiskDecompositionVisitor
-    from spark.risk.estimator import LinearRiskModelEstimator
-    from spark.risk.schema import RiskResultSchema
+    from risk.estimator import LinearRiskModelEstimator
+    from risk.schema import RiskResultSchema
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ class PortfolioRiskAnalyzer:
         final_estimator = estimator or self.estimator
         if final_estimator is None:
             # Import default estimator here to avoid circular imports
-            from spark.risk.estimator import LinearRiskModelEstimator
+            from risk.estimator import LinearRiskModelEstimator
             final_estimator = LinearRiskModelEstimator()
             
         visitor = FactorRiskDecompositionVisitor(
@@ -206,7 +206,7 @@ class PortfolioRiskAnalyzer:
         Converts the hierarchical visitor results into unified schema format
         and populates hierarchical risk data for all components.
         """
-        from spark.risk.schema import RiskResultSchema, AnalysisType
+        from risk.schema import RiskResultSchema, AnalysisType
         
         try:
             # Get names and component IDs from visitor
@@ -449,7 +449,7 @@ class PortfolioRiskAnalyzer:
         }
         
         # 4. Create schema using decoupled factory method
-        from spark.risk.schema_factory import RiskSchemaFactory
+        from risk.schema_factory import RiskSchemaFactory
         
         schema = RiskSchemaFactory.from_visitor_results_with_time_series(
             visitor=visitor,

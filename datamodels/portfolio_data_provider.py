@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 
 if TYPE_CHECKING:
-    from spark.portfolio.graph import PortfolioGraph
+    from portfolio.graph import PortfolioGraph
 
 logger = logging.getLogger(__name__)
 
@@ -164,10 +164,10 @@ class PortfolioDataProvider:
         """Build PortfolioGraph using Spark framework builders."""
         try:
             # Import Spark framework classes
-            from spark.portfolio.graph import PortfolioGraph
-            from spark.portfolio.builders import PortfolioBuilder
-            from spark.portfolio.builder_multiplicative import PortfolioBuilderMultiplicative
-            from spark.portfolio.builder_sum import PortfolioBuilderSum
+            from portfolio.graph import PortfolioGraph
+            from portfolio.builders import PortfolioBuilder
+            from portfolio.builder_multiplicative import PortfolioBuilderMultiplicative
+            from portfolio.builder_sum import PortfolioBuilderSum
             
             # Get builder settings from YAML
             builder_settings = self._portfolio_config.get('builder_settings', {})

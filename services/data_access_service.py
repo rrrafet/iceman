@@ -9,7 +9,7 @@ import numpy as np
 from datetime import datetime
 import logging
 
-from spark.ui.apps.maverick.services.risk_analysis_service import RiskAnalysisService
+from services.risk_analysis_service import RiskAnalysisService
 
 logger = logging.getLogger(__name__)
 

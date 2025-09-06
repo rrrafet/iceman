@@ -11,19 +11,19 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from spark.portfolio.metrics import (
+from portfolio.metrics import (
     MetricStore, InMemoryMetricStore, 
     WeightedAverage
 )
-from spark.portfolio.components import PortfolioComponent, PortfolioNode
+from portfolio.components import PortfolioComponent, PortfolioNode
 
 if TYPE_CHECKING:
-    from spark.portfolio.visitors import (
+    from portfolio.visitors import (
         AggregationVisitor, MultiMetricVisitor,
         ExcessReturnVisitor, FactorRiskDecompositionVisitor
     )
-    from spark.portfolio.metrics import Metric, Aggregator, WeightCalculationService
-    from spark.risk.estimator import LinearRiskModelEstimator
+    from portfolio.metrics import Metric, Aggregator, WeightCalculationService
+    from risk.estimator import LinearRiskModelEstimator
 
 
 class PortfolioGraph:
@@ -1094,10 +1094,10 @@ class PortfolioGraph:
     
     
 # Decision attribution methods are available through the decision_attribution module
-# Usage: from spark.portfolio.decision_attribution import HierarchicalDecisionAnalyzer, PortfolioDecision
+# Usage: from portfolio.decision_attribution import HierarchicalDecisionAnalyzer, PortfolioDecision
 
 # Risk analysis methods are available through the risk_analyzer module
-# Usage: from spark.portfolio.risk_analyzer import PortfolioRiskAnalyzer
+# Usage: from portfolio.risk_analyzer import PortfolioRiskAnalyzer
 
 
 # Add convenience methods for enhanced PortfolioBuilder compatibility

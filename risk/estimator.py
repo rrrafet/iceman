@@ -7,7 +7,7 @@ from statsmodels.regression.linear_model import OLS
 from statsmodels.robust.robust_linear_model import RLM
 from statsmodels.stats.correlation_tools import cov_nearest
 from statsmodels.tools import add_constant
-from spark.risk.model import RiskModel
+from risk.model import RiskModel
 
 
 logger = logging.getLogger(__name__)

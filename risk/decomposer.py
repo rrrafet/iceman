@@ -35,13 +35,13 @@ class RiskDecomposer(RiskDecomposerBase):
     Examples
     --------
     # Traditional portfolio risk analysis
-    >>> from spark.risk import RiskDecomposer, create_single_model_context
+    >>> from risk import RiskDecomposer, create_single_model_context
     >>> context = create_single_model_context(model, weights)
     >>> decomposer = RiskDecomposer(context)
     >>> print(f"Portfolio risk: {decomposer.portfolio_volatility:.2%}")
     
     # Active risk analysis
-    >>> from spark.risk import create_active_risk_context
+    >>> from risk import create_active_risk_context
     >>> context = create_active_risk_context(port_model, bench_model, port_weights, bench_weights)
     >>> decomposer = RiskDecomposer(context)  
     >>> print(f"Active risk: {decomposer.total_active_risk:.2%}")
