@@ -293,7 +293,8 @@ def analyze_portfolio_risk(
         annualized_asset_contrib = RiskAnnualizer.annualize_contributions(asset_contributions, model.frequency)
         annualized_asset_factor = RiskAnnualizer.annualize_contributions(asset_factor_contributions, model.frequency)
         annualized_asset_specific = RiskAnnualizer.annualize_contributions(asset_specific_contributions, model.frequency)
-        
+        annualized_marginal = RiskAnnualizer.annualize_contributions(marginal_contributions, model.frequency)
+
         # Create weighted betas matrix
         weighted_betas = _create_weighted_betas_dict(
             RiskCalculator.calculate_weighted_betas(model.beta, weights_array),
@@ -303,9 +304,6 @@ def analyze_portfolio_risk(
         # Create asset by factor contributions matrix
         asset_by_factor_matrix = RiskCalculator.calculate_asset_by_factor_contributions(
             model.beta, model.factor_covar, weights_array, portfolio_volatility
-        )
-        asset_by_factor_dict = _create_asset_by_factor_dict(
-            asset_by_factor_matrix, asset_names, factor_names
         )
         
         return RiskResult(
@@ -319,9 +317,12 @@ def analyze_portfolio_risk(
             factor_exposures=dict(zip(factor_names, factor_exposures)),
             asset_factor_contributions=dict(zip(asset_names, annualized_asset_factor)),
             asset_specific_contributions=dict(zip(asset_names, annualized_asset_specific)),
-            marginal_contributions=dict(zip(asset_names, RiskAnnualizer.annualize_contributions(marginal_contributions, model.frequency))),
+            marginal_contributions=dict(zip(asset_names, annualized_marginal)),
             weighted_betas=weighted_betas,
-            asset_by_factor_contributions=asset_by_factor_dict,
+            asset_by_factor_contributions=_create_asset_by_factor_dict(
+                RiskAnnualizer.annualize_contributions(asset_by_factor_matrix, model.frequency),
+                asset_names, factor_names
+            ),
             portfolio_weights=dict(zip(asset_names, weights_array)),
             asset_names=asset_names,
             factor_names=factor_names,
@@ -535,7 +536,7 @@ def analyze_active_risk(
                 pass  # Fallback to zeros if calculation fails
         
         # Total factor contributions
-        factor_contributions = factor_allocation_contributions + factor_selection_contributions + factor_cross_contributions
+        factor_contributions = factor_allocation_contributions + factor_selection_contributions  # factor_cross_contributions
     else:
         factor_allocation_contributions = np.zeros(len(factor_names))
         factor_selection_contributions = np.zeros(len(factor_names))
@@ -582,11 +583,19 @@ def analyze_active_risk(
         asset_selection_specific = np.zeros_like(active_weights_array)
         asset_cross_correlation = np.zeros_like(active_weights_array)
         asset_contributions = np.zeros_like(active_weights_array)
-    
-    # Asset-level marginal contributions (MISSING from active risk analysis)
+    if len(asset_names) == 13:
+        pass
+    # Asset-level marginal contributions (complete formula including cross-covariance terms)
     if total_active_risk > 0:
-        marginal_contributions = RiskCalculator.calculate_marginal_contributions(
-            active_model.covar, active_weights_array, total_active_risk
+        # Calculate cross-covariance marginal contributions
+        cross_marginals = RiskCalculator.calculate_marginal_cross_contributions(
+            cross_covar, active_weights_array, port_weights_array, total_active_risk
+        )
+        # Total marginal contributions = allocation + selection + cross terms
+        marginal_contributions = (
+            RiskCalculator.calculate_marginal_contributions(benchmark_model.covar, active_weights_array, total_active_risk)
+            + RiskCalculator.calculate_marginal_contributions(active_model.covar, port_weights_array, total_active_risk)
+            #+ cross_marginals[0] + cross_marginals[1]  # Add both cross-covariance terms: C*w/σ + C^T*d/σ
         )
     else:
         marginal_contributions = np.zeros_like(active_weights_array)
@@ -595,21 +604,36 @@ def analyze_active_risk(
     asset_name_mapping = None
     if asset_names and asset_display_names and len(asset_names) == len(asset_display_names):
         asset_name_mapping = dict(zip(asset_names, asset_display_names))
-    
+
     # Create matrix data for visualization (using active weights)
     weighted_betas = _create_weighted_betas_dict(
-        RiskCalculator.calculate_weighted_betas(portfolio_model.beta, active_weights_array),
+        RiskCalculator.calculate_weighted_betas(active_model.beta, port_weights_array),
         asset_names, factor_names
     )
     
     # Create asset by factor contributions matrix (for active risk)
-    asset_by_factor_matrix = RiskCalculator.calculate_asset_by_factor_contributions(
-        portfolio_model.beta, portfolio_model.factor_covar, active_weights_array, total_active_risk
-    )
-    asset_by_factor_contributions = _create_asset_by_factor_dict(
-        asset_by_factor_matrix, asset_names, factor_names
+    # Decompose into allocation and selection components for mathematical consistency
+    
+    # Allocation component: benchmark exposures with active weights
+    allocation_asset_by_factor = RiskCalculator.calculate_asset_by_factor_contributions(
+        beta=benchmark_model.beta,
+        factor_covar=benchmark_model.factor_covar, 
+        weights=active_weights_array,  # Active weights (portfolio - benchmark)
+        portfolio_volatility=total_active_risk
     )
     
+    # Selection component: beta differences with portfolio weights
+    beta_diff = portfolio_model.beta - benchmark_model.beta
+    selection_asset_by_factor = RiskCalculator.calculate_asset_by_factor_contributions(
+        beta=beta_diff,
+        factor_covar=active_model.factor_covar,
+        weights=port_weights_array,  # Portfolio weights
+        portfolio_volatility=total_active_risk
+    )
+    
+    # Total asset by factor contributions = allocation + selection
+    asset_by_factor_matrix = allocation_asset_by_factor + selection_asset_by_factor
+
     # Validation
     validation = RiskCalculator.validate_active_risk_euler_identity(
         total_active_risk,
@@ -646,6 +670,7 @@ def analyze_active_risk(
         annualized_factor_allocation = RiskAnnualizer.annualize_contributions(factor_allocation_contributions, frequency)
         annualized_factor_selection = RiskAnnualizer.annualize_contributions(factor_selection_contributions, frequency)
         annualized_factor_cross = RiskAnnualizer.annualize_contributions(factor_cross_contributions, frequency)
+        annualized_marginal_active = RiskAnnualizer.annualize_contributions(marginal_contributions, frequency)
         
         return RiskResult(
             total_risk=annualized_results['portfolio_volatility'],
@@ -656,7 +681,7 @@ def analyze_active_risk(
             factor_contributions=dict(zip(factor_names, annualized_factor_contrib)),
             asset_contributions=dict(zip(asset_names, annualized_asset_contrib)),
             factor_exposures=dict(zip(factor_names, active_exposures)),
-            marginal_contributions=dict(zip(asset_names, RiskAnnualizer.annualize_contributions(marginal_contributions, frequency))),
+            marginal_contributions=dict(zip(asset_names, annualized_marginal_active)),
             
             # Portfolio weights
             portfolio_weights=dict(zip(asset_names, port_weights_array)),
@@ -685,8 +710,10 @@ def analyze_active_risk(
             
             # Matrix data for heatmaps
             weighted_betas=weighted_betas,
-            asset_by_factor_contributions=asset_by_factor_contributions,
-            
+            asset_by_factor_contributions = _create_asset_by_factor_dict(
+                RiskAnnualizer.annualize_contributions(asset_by_factor_matrix), asset_names, factor_names
+            ),
+
             # Metadata
             asset_names=asset_names,
             factor_names=factor_names,
@@ -737,8 +764,9 @@ def analyze_active_risk(
             
             # Matrix data for heatmaps
             weighted_betas=weighted_betas,
-            asset_by_factor_contributions=asset_by_factor_contributions,
-            
+            asset_by_factor_contributions = _create_asset_by_factor_dict(
+                asset_by_factor_matrix, asset_names, factor_names
+            ),
             # Metadata
             asset_names=asset_names,
             factor_names=factor_names,
