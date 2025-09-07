@@ -62,11 +62,31 @@ def render_allocation_selection_tab(data_access_service, sidebar_state):
         st.warning("No data available to create allocation-selection table")
         return
     
+    # Add Active Weight column and rename columns for display
+    brinson_df['active_weight'] = brinson_df['portfolio_weight'] - brinson_df['benchmark_weight']
+    
+    # Create column mapping for display
+    column_mapping = {
+        'asset_name': 'Asset Name',
+        'portfolio_weight': 'Portfolio Weight', 
+        'benchmark_weight': 'Benchmark Weight',
+        'active_weight': 'Active Weight',
+        'asset marginal': 'Marginal',
+        'asset contribution to risk': 'Contribution To Risk',
+        'asset contribution to factor risk': 'Contribution To Factor Risk',
+        'asset contribution to specific risk': 'Contribution To Specific Risk',
+        'asset contribution to allocation factor risk': 'Contribution To Allocation Factor Risk',
+        'asset contribution to allocation specific risk': 'Contribution To Allocation Specific Risk',
+        'asset contribution to selection factor risk': 'Contribution To Selection Factor Risk',
+        'asset contribution to selection specific risk': 'Contribution To Selection Specific Risk',
+        'component_id': 'Component Id'
+    }
+    
     # Render the analysis table
-    render_brinson_analysis_table(brinson_df, risk_data)
+    render_brinson_analysis_table(brinson_df, risk_data, column_mapping)
     
     # Add CSV download functionality
-    create_csv_download(brinson_df, component_id, lens)
+    create_csv_download(brinson_df, component_id, lens, column_mapping)
 
 
 def extract_allocation_selection_data(data_access_service, component_id: str, lens: str) -> Optional[Dict[str, Any]]:
@@ -155,16 +175,18 @@ def render_header_badges(component_id: str, risk_data: Dict[str, Any], num_asset
         st.info(f"Annualized: {'Yes' if annualized else 'No'}")
 
 
-def render_brinson_analysis_table(df: pd.DataFrame, risk_data: Dict[str, Any]):
+def render_brinson_analysis_table(df: pd.DataFrame, risk_data: Dict[str, Any], column_mapping: Dict[str, str]):
     """
     Render the main Brinson-style allocation-selection table.
     
     Parameters
     ----------
     df : pd.DataFrame
-        Brinson table with 12 columns
+        Brinson table with original column names
     risk_data : Dict[str, Any]
         Risk decomposition data for context
+    column_mapping : Dict[str, str]
+        Mapping from original to display column names
     """
     #st.subheader(f"Asset-Level Analysis")
     
@@ -176,7 +198,7 @@ def render_brinson_analysis_table(df: pd.DataFrame, risk_data: Dict[str, Any]):
     #     st.info("📊 **Portfolio Risk Analysis**: Allocation and Selection columns are zero (portfolio-only lens)")
     
     # Configure column formatting for display
-    formatted_df = format_table_for_display(df)
+    formatted_df = format_table_for_display(df, column_mapping)
     
     # Display the sortable table
     st.dataframe(
@@ -190,24 +212,26 @@ def render_brinson_analysis_table(df: pd.DataFrame, risk_data: Dict[str, Any]):
     render_table_summary_stats(df, analysis_type)
 
 
-def format_table_for_display(df: pd.DataFrame) -> pd.DataFrame:
+def format_table_for_display(df: pd.DataFrame, column_mapping: Dict[str, str]) -> pd.DataFrame:
     """
     Format the Brinson table for optimal Streamlit display.
     
     Parameters
     ----------
     df : pd.DataFrame
-        Raw Brinson table
+        Raw Brinson table with original column names
+    column_mapping : Dict[str, str]
+        Mapping from original to display column names
         
     Returns
     -------
     pd.DataFrame
-        Formatted table for display
+        Formatted table for display with renamed columns
     """
     display_df = df.copy()
     
     # Format numeric columns with specific formatting requirements
-    weight_columns = ['portfolio_weight', 'benchmark_weight']
+    weight_columns = ['portfolio_weight', 'benchmark_weight', 'active_weight']
     contribution_columns = [
         'asset contribution to risk', 'asset contribution to factor risk',
         'asset contribution to specific risk', 'asset contribution to allocation factor risk',
@@ -234,8 +258,20 @@ def format_table_for_display(df: pd.DataFrame) -> pd.DataFrame:
     for col in marginal_columns:
         if col in display_df.columns:
             display_df[col] = display_df[col].apply(
-                lambda x: f"{x * 10000:.0f}" if not pd.isna(x) else "NaN"
+                lambda x: f"{x * 100:.0f} bps" if not pd.isna(x) else "NaN"
             )
+    
+    # Rename columns for display using the mapping
+    display_df = display_df.rename(columns=column_mapping)
+    
+    # Reorder columns to put Active Weight after Benchmark Weight
+    column_order = [
+        'Asset Name', 'Portfolio Weight', 'Benchmark Weight', 'Active Weight', 'Marginal',
+        'Contribution To Risk', 'Contribution To Factor Risk', 'Contribution To Specific Risk',
+        'Contribution To Allocation Factor Risk', 'Contribution To Allocation Specific Risk',
+        'Contribution To Selection Factor Risk', 'Contribution To Selection Specific Risk', 'Component Id'
+    ]
+    display_df = display_df[column_order]
     
     return display_df
 
@@ -294,24 +330,40 @@ def render_table_summary_stats(df: pd.DataFrame, analysis_type: str):
             st.metric("Selection Specific", format_basis_points(select_specific))
 
 
-def create_csv_download(df: pd.DataFrame, component_id: str, lens: str):
+def create_csv_download(df: pd.DataFrame, component_id: str, lens: str, column_mapping: Dict[str, str]):
     """
     Create CSV download functionality with semicolon delimiter.
     
     Parameters
     ----------
     df : pd.DataFrame
-        Brinson table to export
+        Brinson table to export (with original column names)
     component_id : str
         Selected component ID
     lens : str
         Risk lens
+    column_mapping : Dict[str, str]
+        Mapping from original to display column names
     """
     st.subheader("Export")
     
     if st.button("Download CSV", type="primary"):
+        # Create display version with renamed columns for export
+        export_df = df.copy()
+        export_df['active_weight'] = export_df['portfolio_weight'] - export_df['benchmark_weight']
+        export_df = export_df.rename(columns=column_mapping)
+        
+        # Reorder columns for export
+        column_order = [
+            'Asset Name', 'Portfolio Weight', 'Benchmark Weight', 'Active Weight', 'Marginal',
+            'Contribution To Risk', 'Contribution To Factor Risk', 'Contribution To Specific Risk',
+            'Contribution To Allocation Factor Risk', 'Contribution To Allocation Specific Risk',
+            'Contribution To Selection Factor Risk', 'Contribution To Selection Specific Risk', 'Component Id'
+        ]
+        export_df = export_df[column_order]
+        
         # Export with semicolon delimiter and UTF-8 encoding as specified
-        csv_data = df.to_csv(sep=';', index=False, encoding='utf-8')
+        csv_data = export_df.to_csv(sep=';', index=False, encoding='utf-8')
         
         # Create download filename
         filename = f"allocation_selection_{component_id.replace('/', '_')}_{lens}.csv"
@@ -325,4 +377,4 @@ def create_csv_download(df: pd.DataFrame, component_id: str, lens: str):
         )
     
     # Show export info
-    st.caption(f"Export format: {len(df)} rows × {len(df.columns)} columns, semicolon-delimited, UTF-8 encoding")
+    st.caption(f"Export format: {len(df)} rows × 13 columns, semicolon-delimited, UTF-8 encoding")
