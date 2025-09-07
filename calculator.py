@@ -1084,7 +1084,6 @@ class RiskCalculator:
         
         # Element-wise multiplication: each asset's beta weighted by its portfolio weight
         weighted_betas = beta * weights
-        
         return weighted_betas
     
     @staticmethod
