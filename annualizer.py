@@ -129,6 +129,7 @@ class RiskAnnualizer:
         # Keys that represent contributions (arrays)
         contribution_keys = {
             'factor_contributions',
+            "marginal_contributions",
             'marginal_factor_contributions',
             'asset_total_contributions',
             'asset_factor_contributions',

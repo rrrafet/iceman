@@ -293,7 +293,8 @@ def analyze_portfolio_risk(
         annualized_asset_contrib = RiskAnnualizer.annualize_contributions(asset_contributions, model.frequency)
         annualized_asset_factor = RiskAnnualizer.annualize_contributions(asset_factor_contributions, model.frequency)
         annualized_asset_specific = RiskAnnualizer.annualize_contributions(asset_specific_contributions, model.frequency)
-        
+        annualized_marginal = RiskAnnualizer.annualize_contributions(marginal_contributions, model.frequency)
+
         # Create weighted betas matrix
         weighted_betas = _create_weighted_betas_dict(
             RiskCalculator.calculate_weighted_betas(model.beta, weights_array),
@@ -316,7 +317,7 @@ def analyze_portfolio_risk(
             factor_exposures=dict(zip(factor_names, factor_exposures)),
             asset_factor_contributions=dict(zip(asset_names, annualized_asset_factor)),
             asset_specific_contributions=dict(zip(asset_names, annualized_asset_specific)),
-            marginal_contributions=dict(zip(asset_names, RiskAnnualizer.annualize_contributions(marginal_contributions, model.frequency))),
+            marginal_contributions=dict(zip(asset_names, annualized_marginal)),
             weighted_betas=weighted_betas,
             asset_by_factor_contributions=_create_asset_by_factor_dict(
                 RiskAnnualizer.annualize_contributions(asset_by_factor_matrix, model.frequency),
@@ -582,11 +583,19 @@ def analyze_active_risk(
         asset_selection_specific = np.zeros_like(active_weights_array)
         asset_cross_correlation = np.zeros_like(active_weights_array)
         asset_contributions = np.zeros_like(active_weights_array)
-    
-    # Asset-level marginal contributions (MISSING from active risk analysis)
+    if len(asset_names) == 13:
+        pass
+    # Asset-level marginal contributions (complete formula including cross-covariance terms)
     if total_active_risk > 0:
-        marginal_contributions = RiskCalculator.calculate_marginal_contributions(
-            active_model.covar, active_weights_array, total_active_risk
+        # Calculate cross-covariance marginal contributions
+        cross_marginals = RiskCalculator.calculate_marginal_cross_contributions(
+            cross_covar, active_weights_array, port_weights_array, total_active_risk
+        )
+        # Total marginal contributions = allocation + selection + cross terms
+        marginal_contributions = (
+            RiskCalculator.calculate_marginal_contributions(benchmark_model.covar, active_weights_array, total_active_risk)
+            + RiskCalculator.calculate_marginal_contributions(active_model.covar, port_weights_array, total_active_risk)
+            #+ cross_marginals[0] + cross_marginals[1]  # Add both cross-covariance terms: C*w/σ + C^T*d/σ
         )
     else:
         marginal_contributions = np.zeros_like(active_weights_array)
@@ -595,10 +604,10 @@ def analyze_active_risk(
     asset_name_mapping = None
     if asset_names and asset_display_names and len(asset_names) == len(asset_display_names):
         asset_name_mapping = dict(zip(asset_names, asset_display_names))
-    
+
     # Create matrix data for visualization (using active weights)
     weighted_betas = _create_weighted_betas_dict(
-        RiskCalculator.calculate_weighted_betas(active_model.beta, active_weights_array),
+        RiskCalculator.calculate_weighted_betas(active_model.beta, port_weights_array),
         asset_names, factor_names
     )
     
@@ -661,6 +670,7 @@ def analyze_active_risk(
         annualized_factor_allocation = RiskAnnualizer.annualize_contributions(factor_allocation_contributions, frequency)
         annualized_factor_selection = RiskAnnualizer.annualize_contributions(factor_selection_contributions, frequency)
         annualized_factor_cross = RiskAnnualizer.annualize_contributions(factor_cross_contributions, frequency)
+        annualized_marginal_active = RiskAnnualizer.annualize_contributions(marginal_contributions, frequency)
         
         return RiskResult(
             total_risk=annualized_results['portfolio_volatility'],
@@ -671,7 +681,7 @@ def analyze_active_risk(
             factor_contributions=dict(zip(factor_names, annualized_factor_contrib)),
             asset_contributions=dict(zip(asset_names, annualized_asset_contrib)),
             factor_exposures=dict(zip(factor_names, active_exposures)),
-            marginal_contributions=dict(zip(asset_names, RiskAnnualizer.annualize_contributions(marginal_contributions, frequency))),
+            marginal_contributions=dict(zip(asset_names, annualized_marginal_active)),
             
             # Portfolio weights
             portfolio_weights=dict(zip(asset_names, port_weights_array)),
