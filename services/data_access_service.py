@@ -1616,10 +1616,15 @@ class DataAccessService:
             - Weights (portfolio, benchmark, active) relative to root
             - Computed statistics (mean, std) for each lens
             - Raw time series statistics (mean, std) for each lens
+            - Overlay metadata and weight source information
         """
         try:
             # Get weights relative to root
             weights = self.get_weights_relative_to_root(component_id)
+            
+            # Get component metadata including overlay status
+            metadata = self.portfolio_provider.get_component_metadata(component_id)
+            is_overlay = metadata.get("is_overlay", False)
             
             # Get computed statistics for each lens
             computed_stats = {
@@ -1639,12 +1644,18 @@ class DataAccessService:
             children = self.portfolio_provider.get_component_children(component_id)
             is_leaf = len(children) == 0
             
+            # Determine weight source information
+            weight_source = self._get_weight_source_info(component_id, is_overlay)
+            
             return {
                 "component_id": component_id,
                 "is_leaf": is_leaf,
+                "is_overlay": is_overlay,
                 "weights": weights,
+                "weight_source": weight_source,
                 "computed_stats": computed_stats,
-                "raw_stats": raw_stats
+                "raw_stats": raw_stats,
+                "metadata": metadata
             }
             
         except Exception as e:
@@ -1652,7 +1663,9 @@ class DataAccessService:
             return {
                 "component_id": component_id,
                 "is_leaf": True,
+                "is_overlay": False,
                 "weights": {"portfolio": 0.0, "benchmark": 0.0, "active": 0.0},
+                "weight_source": {"portfolio": "Root Relative", "benchmark": "Root Relative", "active": "Root Relative"},
                 "computed_stats": {
                     "portfolio": {"mean": np.nan, "std": np.nan, "source": "computed"},
                     "benchmark": {"mean": np.nan, "std": np.nan, "source": "computed"},
@@ -1662,7 +1675,49 @@ class DataAccessService:
                     "portfolio": {"mean": np.nan, "std": np.nan, "source": "raw"},
                     "benchmark": {"mean": np.nan, "std": np.nan, "source": "raw"},
                     "active": {"mean": np.nan, "std": np.nan, "source": "raw"}
+                },
+                "metadata": {"is_overlay": False, "component_type": "leaf", "name": component_id, "path": component_id}
+            }
+    
+    def _get_weight_source_info(self, component_id: str, is_overlay: bool) -> Dict[str, str]:
+        """
+        Get weight source information for a component based on overlay implementation changes.
+        
+        Args:
+            component_id: Component identifier
+            is_overlay: Whether component is an overlay strategy
+            
+        Returns:
+            Dictionary with weight source information for each lens
+        """
+        try:
+            if is_overlay:
+                # Based on overlay operational weight implementation:
+                # - Portfolio operational weights are fixed at 1.0
+                # - Benchmark operational weights are 0.0 (overlays excluded from benchmark)
+                # - Active operational weights = Portfolio - Benchmark = 1.0 - 0.0 = 1.0
+                return {
+                    "portfolio": "Operational (Fixed 1.0)",
+                    "benchmark": "Operational (Fixed 0.0)", 
+                    "active": "Operational (Fixed 1.0)",
+                    "description": "Overlay: Operational weights used for risk calculations (allocation weights remain 0.0)"
                 }
+            else:
+                # Regular components use weights relative to root
+                return {
+                    "portfolio": "Root Relative",
+                    "benchmark": "Root Relative",
+                    "active": "Root Relative", 
+                    "description": "Regular component: Weights calculated relative to portfolio root"
+                }
+                
+        except Exception as e:
+            logger.error(f"Error getting weight source info for {component_id}: {e}")
+            return {
+                "portfolio": "Unknown",
+                "benchmark": "Unknown",
+                "active": "Unknown",
+                "description": "Error determining weight source"
             }
     
     def get_hierarchical_stats(self, root_id: Optional[str] = None) -> List[Dict[str, Any]]:

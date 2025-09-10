@@ -28,6 +28,11 @@ def render_stats_tab(data_access_service, sidebar_state):
     st.markdown("""
     This view shows comprehensive statistics for all components in the portfolio hierarchy,
     helping reconcile that data inputs are correctly transformed through the risk analysis system.
+    
+    **Weight Sources for Raw Volatility Calculations:**
+    - **Regular Components**: Use weights relative to portfolio root for calculations
+    - **Overlay Strategies** (🔄): Use operational weights fixed at 1.0 for portfolio risk, 0.0 for benchmark risk
+    - **Allocation vs Operational**: Overlays have 0.0% allocation weights (prevent double-counting) but 1.0 operational weights (enable risk calculations)
     """)
     
     # Controls row
@@ -35,15 +40,15 @@ def render_stats_tab(data_access_service, sidebar_state):
     
     with col1:
         show_computed = st.checkbox("Show Computed Stats", value=True, 
-                                   help="Display statistics from risk computation engine")
+                                   help="Display statistics from risk computation engine using PortfolioGraph")
     
     with col2:
         show_raw = st.checkbox("Show Raw Stats", value=True,
-                              help="Display statistics from raw time series data")
+                              help="Display statistics from raw time series data. For overlays, uses operational weights (1.0) for portfolio risk calculations.")
     
     with col3:
         highlight_discrepancies = st.checkbox("Highlight Discrepancies", value=True,
-                                             help="Highlight differences between computed and raw stats")
+                                             help="Highlight differences between computed and raw stats. Overlays may show expected differences due to operational weight handling.")
     
     # Get hierarchical statistics
     with st.spinner("Loading hierarchical statistics..."):
@@ -78,7 +83,7 @@ def render_stats_tab(data_access_service, sidebar_state):
                     )
             
             with col2:
-                st.caption("Export the statistics table for further analysis")
+                st.caption("Export the statistics table for further analysis. Includes overlay flags and weight source information.")
             
         except Exception as e:
             st.error(f"Error loading statistics: {e}")
@@ -110,22 +115,31 @@ def render_hierarchical_stats_table(
         component_id = stats["component_id"]
         level = stats.get("level", 0)
         is_leaf = stats.get("is_leaf", True)
+        is_overlay = stats.get("is_overlay", False)
         weights = stats["weights"]
+        weight_source = stats.get("weight_source", {})
         computed_stats = stats["computed_stats"]
         raw_stats = stats["raw_stats"]
         
-        # Create indented component name
+        # Create indented component name with overlay indicator
         indent = "  " * level
-        icon = "📄" if is_leaf else "📁"
+        if is_overlay:
+            icon = "🔄" if is_leaf else "📁🔄"  # Overlay indicator
+            component_type = "Overlay" if is_leaf else "Node (Overlay)"
+        else:
+            icon = "📄" if is_leaf else "📁"
+            component_type = "Leaf" if is_leaf else "Node"
         display_name = f"{indent}{icon} {component_id}"
         
         # Build row data
         row = {
             "Component": display_name,
-            "Type": "Leaf" if is_leaf else "Node",
+            "Type": component_type,
+            "Is Overlay": "✅" if is_overlay else "—",
             "Portfolio Weight": f"{weights['portfolio']:.2%}" if not np.isnan(weights['portfolio']) else "—",
             "Benchmark Weight": f"{weights['benchmark']:.2%}" if not np.isnan(weights['benchmark']) else "—",
             "Active Weight": f"{weights['active']:.2%}" if not np.isnan(weights['active']) else "—",
+            "Weight Source": weight_source.get("description", "Root Relative") if weight_source else "Root Relative",
         }
         
         # Add computed statistics if requested
@@ -192,6 +206,21 @@ def render_hierarchical_stats_table(
                     "Component",
                     width="large",
                 ),
+                "Type": st.column_config.TextColumn(
+                    "Type",
+                    help="Component type: Leaf/Node components or Overlay strategies",
+                    width="small",
+                ),
+                "Is Overlay": st.column_config.TextColumn(
+                    "Is Overlay",
+                    help="✅ = Overlay strategy using operational weights (1.0) for risk calculations",
+                    width="small",
+                ),
+                "Weight Source": st.column_config.TextColumn(
+                    "Weight Source", 
+                    help="Source of weights used for raw volatility calculations",
+                    width="medium",
+                ),
                 "Status": st.column_config.TextColumn(
                     "Status",
                     width="small",
@@ -199,8 +228,33 @@ def render_hierarchical_stats_table(
             }
         )
     else:
-        # Regular dataframe display
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        # Regular dataframe display with column config
+        st.dataframe(
+            df, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "Component": st.column_config.TextColumn(
+                    "Component",
+                    width="large",
+                ),
+                "Type": st.column_config.TextColumn(
+                    "Type",
+                    help="Component type: Leaf/Node components or Overlay strategies",
+                    width="small",
+                ),
+                "Is Overlay": st.column_config.TextColumn(
+                    "Is Overlay",
+                    help="✅ = Overlay strategy using operational weights (1.0) for risk calculations",
+                    width="small",
+                ),
+                "Weight Source": st.column_config.TextColumn(
+                    "Weight Source", 
+                    help="Source of weights used for raw volatility calculations",
+                    width="medium",
+                ),
+            }
+        )
     
     # Summary statistics
     st.divider()
@@ -291,13 +345,19 @@ def stats_to_dataframe(
     rows = []
     
     for stats in stats_data:
+        weight_source = stats.get("weight_source", {})
         row = {
             "component_id": stats["component_id"],
             "level": stats.get("level", 0),
             "is_leaf": stats.get("is_leaf", True),
+            "is_overlay": stats.get("is_overlay", False),
             "portfolio_weight": stats["weights"]["portfolio"],
             "benchmark_weight": stats["weights"]["benchmark"],
             "active_weight": stats["weights"]["active"],
+            "portfolio_weight_source": weight_source.get("portfolio", "Root Relative"),
+            "benchmark_weight_source": weight_source.get("benchmark", "Root Relative"),
+            "active_weight_source": weight_source.get("active", "Root Relative"),
+            "weight_source_description": weight_source.get("description", "Root Relative"),
         }
         
         if include_computed:

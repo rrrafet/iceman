@@ -821,6 +821,58 @@ class PortfolioDataProvider:
         
         return None
     
+    def get_component_metadata(self, component_id: str) -> Dict[str, Any]:
+        """
+        Get component metadata including overlay status and other configuration.
+        
+        Args:
+            component_id: Component identifier
+            
+        Returns:
+            Dictionary with component metadata including:
+            - is_overlay: Whether component is an overlay strategy
+            - component_type: 'leaf' or 'node' 
+            - name: Display name
+        """
+        try:
+            # Get component from portfolio graph
+            if self._portfolio_graph and component_id in self._portfolio_graph.components:
+                component = self._portfolio_graph.components[component_id]
+                return {
+                    "is_overlay": getattr(component, 'is_overlay', False),
+                    "component_type": "leaf" if len(self.get_component_children(component_id)) == 0 else "node",
+                    "name": component_id,
+                    "path": component_id
+                }
+            
+            # Fallback: check configuration data
+            if self._portfolio_config and 'components' in self._portfolio_config:
+                for comp in self._portfolio_config['components']:
+                    if comp.get('path') == component_id:
+                        return {
+                            "is_overlay": comp.get('is_overlay', False),
+                            "component_type": comp.get('component_type', 'leaf'),
+                            "name": comp.get('name', component_id),
+                            "path": comp['path']
+                        }
+            
+            # Default metadata if not found
+            return {
+                "is_overlay": False,
+                "component_type": "leaf" if len(self.get_component_children(component_id)) == 0 else "node",
+                "name": component_id,
+                "path": component_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting metadata for {component_id}: {e}")
+            return {
+                "is_overlay": False,
+                "component_type": "leaf",
+                "name": component_id,
+                "path": component_id
+            }
+    
     def validate_data_consistency(self) -> Dict[str, any]:
         """
         Validate data consistency and completeness.
