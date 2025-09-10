@@ -88,7 +88,11 @@ class DataAccessService:
         # Initialize frequency manager
         self.frequency_manager = FrequencyManager()
         
-        logger.info("Initialized DataAccessService with frequency manager")
+        # Initialize date range filtering
+        self.date_range_start: Optional[datetime] = None
+        self.date_range_end: Optional[datetime] = None
+        
+        logger.info("Initialized DataAccessService with frequency manager and date range filtering")
     
     # Frequency management methods
     def set_frequency(self, frequency: str) -> bool:
@@ -133,6 +137,60 @@ class DataAccessService:
     def is_native_frequency(self) -> bool:
         """Check if current frequency is native (no resampling)."""
         return self.frequency_manager.is_native_frequency()
+    
+    # Date range management methods
+    def set_date_range(self, start_date: Optional[datetime], end_date: Optional[datetime]) -> bool:
+        """
+        Set date range for data filtering and trigger re-initialization if needed.
+        
+        Args:
+            start_date: Start date for filtering (inclusive)
+            end_date: End date for filtering (inclusive)
+            
+        Returns:
+            True if date range changed and system was re-initialized, False otherwise
+        """
+        try:
+            # Check if date range changed
+            date_range_changed = (
+                self.date_range_start != start_date or 
+                self.date_range_end != end_date
+            )
+            
+            if date_range_changed:
+                old_start = self.date_range_start
+                old_end = self.date_range_end
+                
+                self.date_range_start = start_date
+                self.date_range_end = end_date
+                
+                logger.info(f"Date range changed from [{old_start}, {old_end}] to [{start_date}, {end_date}], updating data providers")
+                
+                # Update data providers with new date range - this triggers data reload
+                if hasattr(self, 'portfolio_provider') and self.portfolio_provider:
+                    self.portfolio_provider.set_date_range(self.date_range_start, self.date_range_end)
+                    logger.info("Updated PortfolioDataProvider with new date range")
+                
+                if hasattr(self, 'factor_provider') and self.factor_provider:
+                    self.factor_provider.set_date_range(self.date_range_start, self.date_range_end)
+                    logger.info("Updated FactorDataProvider with new date range")
+                
+                # Trigger system re-initialization to rebuild risk calculations
+                self._trigger_system_reinitialization()
+                return True
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error setting date range: {e}")
+            raise
+    
+    def get_date_range(self) -> tuple[Optional[datetime], Optional[datetime]]:
+        """Get current date range filter."""
+        return self.date_range_start, self.date_range_end
+    
+    def clear_date_range(self) -> bool:
+        """Clear date range filter and trigger re-initialization."""
+        return self.set_date_range(None, None)
     
     def switch_risk_model(self, model_code: str) -> bool:
         """
@@ -180,15 +238,16 @@ class DataAccessService:
                     self.risk_analysis_service.risk_computation.clear_cache()
                     logger.info("Cleared risk computation cache")
             
-            # CRITICAL: Update data providers with current frequency before re-initialization
-            logger.info("Updating data providers with current frequency")
+            # Update data providers with current frequency manager before re-initialization
+            # Note: Date range filtering is handled when set_date_range() is called explicitly
+            logger.info("Updating data providers with current frequency manager")
             if hasattr(self, 'portfolio_provider') and self.portfolio_provider:
                 self.portfolio_provider.set_frequency_manager(self.frequency_manager)
-                logger.info("Updated PortfolioDataProvider frequency")
+                logger.info("Updated PortfolioDataProvider frequency manager")
             
             if hasattr(self, 'factor_provider') and self.factor_provider:
                 self.factor_provider.set_frequency_manager(self.frequency_manager)
-                logger.info("Updated FactorDataProvider frequency")
+                logger.info("Updated FactorDataProvider frequency manager")
             
             # Re-initialize the entire system
             logger.info("Re-initializing risk analysis service")
@@ -204,6 +263,9 @@ class DataAccessService:
             logger.error(f"Error during system re-initialization: {e}")
             raise RuntimeError(f"Failed to re-initialize system: {e}")
     
+    # Note: Date filtering is now handled at the data provider level during data loading
+    # This ensures a single source of truth for all filtered data
+
     # Resampling helper methods
     def _resample_returns_series(self, series: pd.Series) -> pd.Series:
         """
@@ -267,6 +329,7 @@ class DataAccessService:
         """
         try:
             returns = self.portfolio_provider.get_component_returns(component_id, 'portfolio')
+            # Date filtering already applied at data provider level
             return self._resample_returns_series(returns)
         except Exception as e:
             logger.error(f"Error getting portfolio returns for {component_id}: {e}")
@@ -284,6 +347,7 @@ class DataAccessService:
         """
         try:
             returns = self.portfolio_provider.get_component_returns(component_id, 'benchmark')
+            # Date filtering already applied at data provider level
             return self._resample_returns_series(returns)
         except Exception as e:
             logger.error(f"Error getting benchmark returns for {component_id}: {e}")
@@ -380,6 +444,7 @@ class DataAccessService:
         try:
             if return_type in ['portfolio', 'benchmark']:
                 matrix = self.portfolio_provider.get_returns_matrix(return_type)
+                # Date filtering already applied at data provider level
                 return self._resample_returns_dataframe(matrix)
             elif return_type == 'active':
                 # Compute active returns matrix
@@ -389,7 +454,7 @@ class DataAccessService:
                 if portfolio_matrix.empty or benchmark_matrix.empty:
                     return pd.DataFrame()
                 
-                # Apply resampling to both matrices before computing active returns
+                # Date filtering already applied at data provider level, just resample
                 portfolio_resampled = self._resample_returns_dataframe(portfolio_matrix)
                 benchmark_resampled = self._resample_returns_dataframe(benchmark_matrix)
                 
@@ -1365,7 +1430,7 @@ class DataAccessService:
             if factor_returns.empty:
                 return pd.DataFrame()
             
-            # Apply resampling to factor returns
+            # Date filtering already applied at data provider level, just resample
             factor_returns_resampled = self._resample_returns_dataframe(factor_returns)
             
             if factor_names:

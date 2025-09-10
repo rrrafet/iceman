@@ -1,6 +1,8 @@
 import streamlit as st
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
+from datetime import datetime, timedelta
+import pandas as pd
 
 @dataclass
 class SidebarState:
@@ -13,6 +15,9 @@ class SidebarState:
     annualized: bool
     show_percentage: bool
     frequency: str
+    date_range_start: Optional[datetime]
+    date_range_end: Optional[datetime]
+    date_range_preset: str
 
 def render_sidebar(config_service, data_access_service) -> SidebarState:
     """Render sidebar using 3-layer architecture services."""
@@ -147,6 +152,120 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             key="frequency_selector"
         )
         
+        st.divider()
+        
+        # Date Range selector
+        st.subheader("Date Range")
+        
+        def get_preset_dates(preset: str) -> tuple[datetime, datetime]:
+            """Calculate start and end dates based on preset."""
+            end_date = datetime.now()
+            
+            if preset == "Daily -6M":
+                start_date = end_date - timedelta(days=180)
+            elif preset == "Daily -1Y":
+                start_date = end_date - timedelta(days=365)
+            elif preset == "Daily -3Y":
+                start_date = end_date - timedelta(days=365 * 3)
+            elif preset == "Daily -5Y":
+                start_date = end_date - timedelta(days=365 * 5)
+            elif preset == "Weekly -1Y":
+                start_date = end_date - timedelta(days=365)
+            elif preset == "Weekly -3Y":
+                start_date = end_date - timedelta(days=365 * 3)
+            elif preset == "Weekly -5Y":
+                start_date = end_date - timedelta(days=365 * 5)
+            else:  # Custom
+                start_date = end_date - timedelta(days=365)
+            
+            return start_date, end_date
+        
+        # Preset options
+        preset_options = [
+            "Daily -6M", "Daily -1Y", "Daily -3Y", "Daily -5Y",
+            "Weekly -1Y", "Weekly -3Y", "Weekly -5Y", "Custom"
+        ]
+        
+        # Get current data access service state to determine default
+        current_start, current_end = data_access_service.get_date_range()
+        
+        # Initialize session state for date range if needed
+        if "date_range_initialized" not in st.session_state:
+            st.session_state.date_range_initialized = True
+            # Set default preset
+            if current_start is None and current_end is None:
+                default_preset = "Daily -1Y"
+                default_start, default_end = get_preset_dates(default_preset)
+                st.session_state.date_range_preset = default_preset
+                st.session_state.date_range_start = default_start
+                st.session_state.date_range_end = default_end
+            else:
+                # Use current values from data access service
+                st.session_state.date_range_start = current_start
+                st.session_state.date_range_end = current_end
+                st.session_state.date_range_preset = "Custom"
+        
+        # Determine default preset index
+        current_preset = getattr(st.session_state, 'date_range_preset', 'Daily -1Y')
+        try:
+            default_preset_index = preset_options.index(current_preset)
+        except ValueError:
+            default_preset_index = 1
+        
+        selected_preset = st.selectbox(
+            "Select date range preset",
+            options=preset_options,
+            index=default_preset_index,
+            key="date_range_preset_selector"
+        )
+        
+        # Handle preset change
+        if selected_preset != getattr(st.session_state, 'date_range_preset', 'Daily -1Y'):
+            st.session_state.date_range_preset = selected_preset
+            if selected_preset != "Custom":
+                # Update session state with preset dates
+                preset_start, preset_end = get_preset_dates(selected_preset)
+                st.session_state.date_range_start = preset_start
+                st.session_state.date_range_end = preset_end
+        
+        # Calculate dates based on preset or use custom inputs
+        if selected_preset == "Custom":
+            # Get default values for custom inputs
+            default_start = getattr(st.session_state, 'date_range_start', datetime.now() - timedelta(days=365))
+            default_end = getattr(st.session_state, 'date_range_end', datetime.now())
+            
+            # Custom date inputs
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date = st.date_input(
+                    "Start Date", 
+                    value=default_start.date() if isinstance(default_start, datetime) else default_start,
+                    key="custom_start_date"
+                )
+            with col2:
+                end_date = st.date_input(
+                    "End Date",
+                    value=default_end.date() if isinstance(default_end, datetime) else default_end,
+                    key="custom_end_date"
+                )
+            
+            # Convert to datetime objects and update session state
+            date_range_start = datetime.combine(start_date, datetime.min.time()) if start_date else None
+            date_range_end = datetime.combine(end_date, datetime.min.time()) if end_date else None
+            
+            # Update session state
+            st.session_state.date_range_start = date_range_start
+            st.session_state.date_range_end = date_range_end
+        else:
+            # Use session state values for preset (already calculated above)
+            date_range_start = st.session_state.date_range_start
+            date_range_end = st.session_state.date_range_end
+            
+            # Display the calculated range
+            if date_range_start and date_range_end:
+                st.text(f"From: {date_range_start.strftime('%Y-%m-%d')}")
+                st.text(f"To: {date_range_end.strftime('%Y-%m-%d')}")
+        
         # Factor filter  
         # st.subheader("Factor Filter")
         # try:
@@ -176,5 +295,8 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         selected_factors=None,
         annualized=None,
         show_percentage=None,
-        frequency=selected_frequency
+        frequency=selected_frequency,
+        date_range_start=date_range_start,
+        date_range_end=date_range_end,
+        date_range_preset=selected_preset
     )

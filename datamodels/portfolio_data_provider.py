@@ -44,6 +44,10 @@ class PortfolioDataProvider:
         self.frequency_manager = None
         self.current_frequency = "B"  # Default to business daily
         
+        # Date range filtering
+        self.date_range_start: Optional[datetime] = None
+        self.date_range_end: Optional[datetime] = None
+        
         self._load_config_and_build_graph()
     
     def set_frequency_manager(self, frequency_manager):
@@ -57,6 +61,28 @@ class PortfolioDataProvider:
         if frequency_manager:
             self.current_frequency = frequency_manager.current_frequency
             logger.info(f"PortfolioDataProvider frequency set to: {self.current_frequency}")
+    
+    def set_date_range(self, start_date: Optional[datetime], end_date: Optional[datetime]):
+        """
+        Set date range filter and reload data with filtering applied at source.
+        
+        Args:
+            start_date: Start date for filtering (inclusive)
+            end_date: End date for filtering (inclusive)
+        """
+        # Check if date range actually changed
+        date_range_changed = (
+            self.date_range_start != start_date or 
+            self.date_range_end != end_date
+        )
+        
+        if date_range_changed:
+            self.date_range_start = start_date
+            self.date_range_end = end_date
+            logger.info(f"PortfolioDataProvider date range set to: [{start_date}, {end_date}]")
+            
+            # Reload and rebuild with filtered data from source
+            self._load_config_and_build_graph()
     
     def _resample_returns_series(self, series: pd.Series) -> pd.Series:
         """
@@ -156,11 +182,37 @@ class PortfolioDataProvider:
         if not pd.api.types.is_datetime64_any_dtype(self._data['date']):
             self._data['date'] = pd.to_datetime(self._data['date'])
         
+        # Apply date range filtering at source if set
+        self._apply_date_range_filter()
+        
         # Sort by date and component for consistency
         self._data = self._data.sort_values(['date', 'component_id'])
         
         logger.info(f"Loaded time series data: {len(self._data)} records, "
                    f"{self._data['component_id'].nunique()} components")
+    
+    def _apply_date_range_filter(self):
+        """Apply date range filter to loaded data if date range is set."""
+        if self._data is None or self._data.empty:
+            return
+            
+        original_count = len(self._data)
+        
+        # Apply date filtering if date range is set
+        if self.date_range_start is not None or self.date_range_end is not None:
+            if self.date_range_start is not None:
+                self._data = self._data[self._data['date'] >= pd.Timestamp(self.date_range_start)]
+                
+            if self.date_range_end is not None:
+                self._data = self._data[self._data['date'] <= pd.Timestamp(self.date_range_end)]
+            
+            filtered_count = len(self._data)
+            logger.info(f"Applied date range filter: {original_count} -> {filtered_count} records")
+            
+            if filtered_count == 0:
+                logger.warning("Date range filter resulted in no data. Check date range settings.")
+        else:
+            logger.debug("No date range filter applied - using all available data")
     
     def _validate_component_mapping(self) -> Dict[str, Any]:
         """
