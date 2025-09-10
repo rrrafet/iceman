@@ -99,6 +99,22 @@ def run():
     # Render sidebar and get filter states
     sidebar_state = render_sidebar(config_service, data_access_service)
     
+    # Handle risk model changes
+    current_model = data_access_service.get_current_risk_model()
+    if sidebar_state.selected_risk_model != current_model:
+        with st.spinner(f"Loading risk model: {sidebar_state.selected_risk_model}..."):
+            try:
+                success = data_access_service.switch_risk_model(sidebar_state.selected_risk_model)
+                if success:
+                    st.success(f"Risk model changed to {sidebar_state.selected_risk_model}")
+                    st.info("🔄 Risk calculations re-initialized with new factor model.")
+                    # Force a rerun to refresh all data with new model
+                    st.rerun()
+                else:
+                    st.error(f"Failed to switch to risk model: {sidebar_state.selected_risk_model}")
+            except Exception as e:
+                st.error(f"Failed to change risk model: {e}")
+    
     # Handle frequency changes
     current_freq = data_access_service.get_current_frequency()
     if sidebar_state.frequency != current_freq:
@@ -132,7 +148,7 @@ def run():
     
     with col2:
         # Risk model and analysis status  
-        current_risk_model = sidebar_state.selected_risk_model if hasattr(sidebar_state, 'selected_risk_model') else config_service.get_default_risk_model()
+        current_risk_model = data_access_service.get_current_risk_model()
         st.markdown(f"**Risk Model:** {current_risk_model}")
         #st.caption("Risk Analysis: Ready")
     

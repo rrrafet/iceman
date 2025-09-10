@@ -80,13 +80,25 @@ class RiskComputation:
             start_time = time.time()
             logger.info("Starting factor risk decomposition...")
             
-            # Create visitor if not provided
-            if self._visitor is None:
-                self._visitor = FactorRiskDecompositionVisitor(
-                    factor_returns=factor_returns,
-                    metric_store=self.portfolio_graph.metric_store
-                )
-                logger.debug("Created new FactorRiskDecompositionVisitor")
+            # Clear old risk result metrics from the metric store before running new visitor
+            # This prevents stale results from previous factor models while preserving other data
+            if self.portfolio_graph.metric_store and hasattr(self.portfolio_graph.metric_store, 'remove_metric'):
+                cleared_count = 0
+                for component_id in self.portfolio_graph.components.keys():
+                    for lens in ['portfolio', 'benchmark', 'active']:
+                        metric_name = f"risk_result_{lens}"
+                        if self.portfolio_graph.metric_store.remove_metric(component_id, metric_name):
+                            cleared_count += 1
+                logger.debug(f"Cleared {cleared_count} stale risk result metrics before new decomposition")
+            
+            # Always create a new visitor with the current factor returns
+            # This ensures we use the correct factor model data
+            self._visitor = FactorRiskDecompositionVisitor(
+                factor_returns=factor_returns,
+                metric_store=self.portfolio_graph.metric_store
+            )
+            logger.debug(f"Created new FactorRiskDecompositionVisitor with {factor_returns.shape[1]} factors")
+            logger.info(f"Factor model contains: {list(factor_returns.columns)}")
             
             # Store factor returns for staleness checking
             self._last_factor_returns = factor_returns.copy()
@@ -176,7 +188,9 @@ class RiskComputation:
     def mark_stale(self) -> None:
         """Mark the computation as stale, requiring recomputation."""
         self._is_stale = True
-        logger.debug("Marked computation as stale")
+        # Clear the visitor to force recreation with new factor data
+        self._visitor = None
+        logger.debug("Marked computation as stale and cleared visitor")
     
     def get_computation_stats(self) -> Dict[str, Any]:
         """
@@ -494,6 +508,7 @@ class RiskComputation:
         except Exception as e:
             logger.debug(f"Error in debug_available_metrics: {e}")
     
+
     def get_metric_store_summary(self) -> Dict[str, Any]:
         """
         Get summary of metric store contents for debugging.

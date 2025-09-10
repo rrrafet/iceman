@@ -134,6 +134,37 @@ class DataAccessService:
         """Check if current frequency is native (no resampling)."""
         return self.frequency_manager.is_native_frequency()
     
+    def switch_risk_model(self, model_code: str) -> bool:
+        """
+        Switch to a different risk model and reinitialize the system.
+        
+        Args:
+            model_code: Risk model code to switch to
+            
+        Returns:
+            True if switch successful, False otherwise
+        """
+        try:
+            logger.info(f"DataAccessService: Switching to risk model: {model_code}")
+            
+            # Call the underlying service method
+            success = self.risk_analysis_service.switch_risk_model(model_code)
+            
+            if success:
+                logger.info(f"Successfully switched to risk model: {model_code}")
+                return True
+            else:
+                logger.error(f"Failed to switch to risk model: {model_code}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error switching risk model to {model_code}: {e}")
+            return False
+    
+    def get_current_risk_model(self) -> str:
+        """Get the currently active risk model."""
+        return self.risk_analysis_service.get_current_risk_model()
+    
     def _trigger_system_reinitialization(self):
         """Trigger full system re-initialization after frequency change."""
         try:

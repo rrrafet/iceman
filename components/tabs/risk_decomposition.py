@@ -38,7 +38,10 @@ def render_risk_decomposition_tab(data_access_service, sidebar_state):
     lens = sidebar_state.lens
 
     st.header("Risk Decomposition")
-    st.markdown(f"**Component:** {sidebar_state.selected_component_id} | **Lens:** {lens.title()}")
+    
+    # Get current risk model
+    current_model = data_access_service.get_current_risk_model()
+    st.markdown(f"**Component:** {sidebar_state.selected_component_id} | **Lens:** {lens.title()} | **Risk Model:** {current_model}")
     
     # Data availability diagnostics
     # render_data_availability_diagnostics(data_access_service, sidebar_state)
