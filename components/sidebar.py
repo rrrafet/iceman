@@ -8,6 +8,7 @@ class SidebarState:
     lens: str
     selected_component_id: str
     selected_risk_model: str
+    selected_portfolio_graph: str
     selected_factors: List[str]
     annualized: bool
     show_percentage: bool
@@ -23,6 +24,29 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         st.subheader("Configuration")
         portfolio_name = config_service.get_portfolio_name()
         st.text(f"Graph: {portfolio_name}")
+        
+        st.divider()
+        
+        # Portfolio Graph selector
+        st.subheader("Portfolio Graph")
+        available_portfolio_graphs = config_service.get_available_portfolio_graphs()
+        
+        # Get current portfolio graph from configuration
+        current_portfolio_graph = config_service.get_default_portfolio_graph()
+        
+        # Find current index
+        try:
+            default_portfolio_index = available_portfolio_graphs.index(current_portfolio_graph)
+        except (ValueError, AttributeError):
+            default_portfolio_index = 0
+        
+        selected_portfolio_graph = st.selectbox(
+            "Select portfolio graph",
+            options=available_portfolio_graphs,
+            index=default_portfolio_index,
+            key="portfolio_graph_selector",
+            help="Select a portfolio configuration to analyze"
+        )
         
         st.divider()
         
@@ -56,11 +80,12 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         
         # Get all available components
         available_components = data_access_service.get_all_component_ids()
+        portfolio_graph = data_access_service.risk_analysis_service.get_portfolio_graph()
         if not available_components:
-            available_components = [config_service.get_root_component_id()]
+            available_components = [config_service.get_root_component_id(portfolio_graph)]
         
         # Default to root component
-        root_component = config_service.get_root_component_id()
+        root_component = config_service.get_root_component_id(portfolio_graph)
         default_component = root_component if root_component in available_components else (available_components[0] if available_components else root_component)
         
         try:
@@ -147,6 +172,7 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         lens=lens,
         selected_component_id=selected_component_id,
         selected_risk_model=selected_risk_model,
+        selected_portfolio_graph=selected_portfolio_graph,
         selected_factors=None,
         annualized=None,
         show_percentage=None,

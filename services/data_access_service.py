@@ -1432,15 +1432,15 @@ class DataAccessService:
             Dictionary with portfolio, benchmark, and active weights relative to root
         """
         try:
+            # Get path from component to root
+            portfolio_graph = self.risk_analysis_service.get_portfolio_graph()
+            
             # Get the root component ID
-            root_id = self.risk_analysis_service.config_service.get_root_component_id()
+            root_id = self.risk_analysis_service.config_service.get_root_component_id(portfolio_graph)
             
             # If this is the root, return 100% weights
             if component_id == root_id:
                 return {"portfolio": 1.0, "benchmark": 1.0, "active": 0.0}
-            
-            # Get path from component to root
-            portfolio_graph = self.risk_analysis_service.get_portfolio_graph()
             if not portfolio_graph:
                 logger.warning(f"Portfolio graph not available for weight calculation")
                 return {"portfolio": 0.0, "benchmark": 0.0, "active": 0.0}
@@ -1613,7 +1613,8 @@ class DataAccessService:
         try:
             # Get root ID if not provided
             if root_id is None:
-                root_id = self.risk_analysis_service.config_service.get_root_component_id()
+                portfolio_graph = self.risk_analysis_service.get_portfolio_graph()
+                root_id = self.risk_analysis_service.config_service.get_root_component_id(portfolio_graph)
             
             # Build hierarchical list
             stats_list = []

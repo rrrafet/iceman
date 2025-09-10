@@ -99,6 +99,47 @@ def run():
     # Render sidebar and get filter states
     sidebar_state = render_sidebar(config_service, data_access_service)
     
+    # Handle portfolio graph changes
+    current_portfolio_graph = config_service.get_default_portfolio_graph()
+    if sidebar_state.selected_portfolio_graph != current_portfolio_graph:
+        with st.spinner(f"Loading portfolio graph: {sidebar_state.selected_portfolio_graph}..."):
+            try:
+                # Get the new portfolio config path
+                new_portfolio_config_path = config_service.get_portfolio_graph_path(sidebar_state.selected_portfolio_graph)
+                
+                # Reinitialize services with new portfolio
+                factor_data_path = config_service.get_data_source_path('factor_returns')
+                factor_provider = FactorDataProvider(str(factor_data_path))
+                portfolio_provider = PortfolioDataProvider(str(new_portfolio_config_path))
+                
+                # Create new risk analysis service
+                new_risk_analysis_service = RiskAnalysisService(
+                    config_service=config_service,
+                    factor_provider=factor_provider,
+                    portfolio_provider=portfolio_provider
+                )
+                
+                # Initialize the new risk analysis service
+                if new_risk_analysis_service.initialize():
+                    # Create new data access service
+                    new_data_access_service = DataAccessService(new_risk_analysis_service)
+                    
+                    # Update session state
+                    st.session_state.risk_analysis_service = new_risk_analysis_service
+                    st.session_state.data_access_service = new_data_access_service
+                    
+                    # Update config service to reflect new default
+                    config_service.update_setting("portfolio_graphs.default", sidebar_state.selected_portfolio_graph)
+                    
+                    st.success(f"Portfolio graph changed to {sidebar_state.selected_portfolio_graph}")
+                    st.info("🔄 Portfolio and risk calculations re-initialized with new graph structure.")
+                    # Force a rerun to refresh all data with new portfolio
+                    st.rerun()
+                else:
+                    st.error(f"Failed to initialize risk analysis with portfolio: {sidebar_state.selected_portfolio_graph}")
+            except Exception as e:
+                st.error(f"Failed to change portfolio graph: {e}")
+    
     # Handle risk model changes
     current_model = data_access_service.get_current_risk_model()
     if sidebar_state.selected_risk_model != current_model:
@@ -143,7 +184,8 @@ def run():
         st.markdown(f"**Graph:** {portfolio_name}")
         
         # Show current component path
-        selected_component = sidebar_state.selected_component_id if hasattr(sidebar_state, 'selected_component_id') else config_service.get_root_component_id()
+        portfolio_graph = data_access_service.risk_analysis_service.get_portfolio_graph()
+        selected_component = sidebar_state.selected_component_id if hasattr(sidebar_state, 'selected_component_id') else config_service.get_root_component_id(portfolio_graph)
         #st.caption(f"Component: {selected_component}")
     
     with col2:

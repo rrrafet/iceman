@@ -15,9 +15,13 @@ risk_model:
     - "Dollar"
     - "Market"
 
-portfolio:
+portfolio: {}
+
+portfolio_graphs:
   default: "strategic_portfolio"
-  root_component_id: "TOTAL"
+  available:
+    - "strategic_portfolio"
+    - "liquid_portfolio"
 
 analysis:
   annualized: true
@@ -33,8 +37,12 @@ ui_defaults:
 
 # Data sources - paths will be resolved relative to base_dir
 data_sources:
-  portfolio_config: "graphs/strategic_portfolio.yaml"
   factor_returns: "data/factor_returns_many.parquet"
+
+# Portfolio graph configurations - paths will be resolved relative to base_dir
+portfolio_graph_configs:
+  strategic_portfolio: "graphs/strategic_portfolio.yaml"
+  liquid_portfolio: "graphs/liquid_portfolio.yaml"
 
 logging:
   level: "INFO"
