@@ -29,11 +29,15 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         # Risk Model selector
         st.subheader("Risk Model")
         available_models = config_service.get_available_risk_models()
-        default_risk_model = config_service.get_default_risk_model()
         
-        # Find default index
+        # Get current risk model from data access service
+        current_risk_model = data_access_service.get_current_risk_model()
+        if not current_risk_model:
+            current_risk_model = config_service.get_default_risk_model()
+        
+        # Find current index
         try:
-            default_index = available_models.index(default_risk_model)
+            default_index = available_models.index(current_risk_model)
         except (ValueError, AttributeError):
             default_index = 0
         
@@ -41,7 +45,8 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             "Factor risk model",
             options=available_models,
             index=default_index,
-            key="risk_model_selector"
+            key="risk_model_selector",
+            help="Select a factor risk model to analyze portfolio risk"
         )
         
         st.divider()

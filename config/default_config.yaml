@@ -9,9 +9,11 @@ paths:
   graphs_dir: "graphs"
 
 risk_model:
-  default: "macro1"
+  default: "macro0"
   available:
-    - "macro1"
+    - "macro0"
+    - "Dollar"
+    - "Market"
 
 portfolio:
   default: "strategic_portfolio"
@@ -32,7 +34,7 @@ ui_defaults:
 # Data sources - paths will be resolved relative to base_dir
 data_sources:
   portfolio_config: "graphs/strategic_portfolio.yaml"
-  factor_returns: "data/factor_returns.parquet"
+  factor_returns: "data/factor_returns_many.parquet"
 
 logging:
   level: "INFO"
