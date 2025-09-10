@@ -228,6 +228,16 @@ class InMemoryMetricStore(MetricStore):
     
     def get_all_metrics(self, component_id: str) -> Dict[str, Metric]:
         return self._store.get(component_id, {}).copy()
+    
+    def remove_metric(self, component_id: str, metric_name: str) -> bool:
+        """Remove a specific metric for a component. Returns True if metric existed."""
+        if component_id in self._store and metric_name in self._store[component_id]:
+            del self._store[component_id][metric_name]
+            # Remove component entry if no metrics remain
+            if not self._store[component_id]:
+                del self._store[component_id]
+            return True
+        return False
 
 
 class Aggregator(ABC):
