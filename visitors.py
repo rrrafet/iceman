@@ -120,7 +120,7 @@ class AggregationVisitor(PortfolioVisitor):
         return 1.0  # Default weight
     
     def _get_parent_operational_weight(self, overlay_component: 'PortfolioComponent') -> float:
-        """Get operational weight for overlay component from its parent"""
+        """Get operational weight for overlay component (always 1.0)"""
         # Use the component's built-in operational weight method
         return overlay_component.get_operational_weight(self.weight_metric_name)
     
@@ -600,7 +600,8 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                     asset_display_names=descendant_names,
                     annualize=self.annualize
                 )
-                
+                if (len(descendant_leaves) > 9):
+                    print("debug")
                 # Store RiskResult objects directly (no complex context)
                 self._node_risk_results[node.component_id] = {
                     'portfolio': portfolio_result,
@@ -1275,7 +1276,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         """Get weight for a component with overlay strategy support"""
         # Handle overlay strategies - use operational weight for risk decomposition
         if hasattr(component, 'is_overlay') and getattr(component, 'is_overlay', False):
-            # For overlay components, use operational weight (parent weight) instead of allocation weight
+            # For overlay components, use operational weight (1.0) instead of allocation weight
             return component.get_operational_weight(weight_metric)
         
         if not self.metric_store:
@@ -1294,6 +1295,124 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         
         return 1.0
     
+    def _normalize_weights_excluding_overlays(self, weights: np.ndarray, descendant_leaves: List[str], return_type: str) -> np.ndarray:
+        """
+        Normalize weights excluding overlays from the denominator.
+        
+        For portfolio weights:
+        - Uses operational weights for overlays (already retrieved via path aggregation)
+        - Normalizes only non-overlay weights by their sum
+        - Preserves overlay operational weights unchanged
+        
+        For benchmark weights:
+        - Standard normalization (overlays not supported in benchmarks)
+        
+        Parameters
+        ----------
+        weights : np.ndarray
+            Raw effective weights array
+        descendant_leaves : List[str]
+            List of descendant leaf component IDs
+        return_type : str
+            'portfolio' or 'benchmark'
+            
+        Returns
+        -------
+        np.ndarray
+            Normalized weights with overlay-aware logic
+        """
+        if len(weights) != len(descendant_leaves):
+            self.logger.error(f"Weight array length ({len(weights)}) != descendant leaves length ({len(descendant_leaves)})")
+            return weights
+        
+        if return_type == 'benchmark':
+            # Benchmark normalization should also exclude overlays (overlays not supported in benchmarks)
+            normalized_weights = np.copy(weights)
+            
+            # Identify overlay and non-overlay components
+            overlay_indices = []
+            non_overlay_indices = []
+            non_overlay_weights = []
+            
+            for i, leaf_id in enumerate(descendant_leaves):
+                # Check if this component is an overlay
+                is_overlay = False
+                if self.metric_store:
+                    overlay_metric = self.metric_store.get_metric(leaf_id, 'is_overlay')
+                    is_overlay = overlay_metric is not None and overlay_metric.value() > 0
+                
+                if is_overlay:
+                    overlay_indices.append(i)
+                    # Set overlay weights to 0 in benchmarks (benchmarks don't support overlays)
+                    normalized_weights[i] = 0.0
+                    self.logger.debug(f"  Benchmark overlay {leaf_id}: set weight to 0.0 (not supported)")
+                else:
+                    non_overlay_indices.append(i)
+                    non_overlay_weights.append(weights[i])
+            
+            # Normalize non-overlay weights to sum to 1.0
+            if non_overlay_weights and np.sum(non_overlay_weights) > 0:
+                non_overlay_total = np.sum(non_overlay_weights)
+                for i, idx in enumerate(non_overlay_indices):
+                    normalized_weights[idx] = non_overlay_weights[i] / non_overlay_total
+                    
+                self.logger.debug(f"  Normalized {len(non_overlay_indices)} non-overlay benchmark weights by total {non_overlay_total:.6f}")
+            else:
+                # If no non-overlay weights, use equal weights for non-overlays
+                if non_overlay_indices:
+                    equal_weight = 1.0 / len(non_overlay_indices)
+                    for idx in non_overlay_indices:
+                        normalized_weights[idx] = equal_weight
+                    self.logger.warning(f"  Used equal weights fallback for {len(non_overlay_indices)} non-overlay benchmark components")
+            
+            return normalized_weights
+        
+        elif return_type == 'portfolio':
+            # Overlay-aware normalization for portfolio weights
+            normalized_weights = np.copy(weights)
+            
+            # Identify overlay and non-overlay components
+            overlay_indices = []
+            non_overlay_indices = []
+            non_overlay_weights = []
+            
+            for i, leaf_id in enumerate(descendant_leaves):
+                # Check if this component is an overlay
+                is_overlay = False
+                if self.metric_store:
+                    overlay_metric = self.metric_store.get_metric(leaf_id, 'is_overlay')
+                    is_overlay = overlay_metric is not None and overlay_metric.value() > 0
+                
+                if is_overlay:
+                    overlay_indices.append(i)
+                    # Overlay weights are already operational weights from path aggregation
+                    # Keep them unchanged
+                    self.logger.debug(f"  Overlay {leaf_id}: preserving operational weight {weights[i]:.6f}")
+                else:
+                    non_overlay_indices.append(i)
+                    non_overlay_weights.append(weights[i])
+            
+            # Normalize non-overlay weights to sum to 1.0
+            if non_overlay_weights and np.sum(non_overlay_weights) > 0:
+                non_overlay_total = np.sum(non_overlay_weights)
+                for i, idx in enumerate(non_overlay_indices):
+                    normalized_weights[idx] = non_overlay_weights[i] / non_overlay_total
+                    
+                self.logger.debug(f"  Normalized {len(non_overlay_indices)} non-overlay weights by total {non_overlay_total:.6f}")
+            else:
+                # If no non-overlay weights, use equal weights for non-overlays
+                if non_overlay_indices:
+                    equal_weight = 1.0 / len(non_overlay_indices)
+                    for idx in non_overlay_indices:
+                        normalized_weights[idx] = equal_weight
+                    self.logger.warning(f"  Used equal weights fallback for {len(non_overlay_indices)} non-overlay components")
+            
+            return normalized_weights
+        
+        else:
+            self.logger.error(f"Unknown return_type: {return_type}")
+            return weights
+
     def _calculate_effective_weights(self, node: 'PortfolioNode', descendant_leaves: List[str]) -> None:
         """Calculate effective weights for descendants using WeightPathAggregator"""
         node_id = node.component_id
@@ -1332,9 +1451,9 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         self.logger.debug(f"Retrieved effective weights: portfolio shape={portfolio_weights.shape if portfolio_weights is not None else 'None'}, benchmark shape={benchmark_weights.shape if benchmark_weights is not None else 'None'}")
         
         if portfolio_weights is not None and benchmark_weights is not None:
-            # Normalize weights within this node's context
-            portfolio_normalized = self._weight_aggregator.normalize_weights(portfolio_weights)
-            benchmark_normalized = self._weight_aggregator.normalize_weights(benchmark_weights)
+            # Use overlay-aware normalization instead of generic normalization
+            portfolio_normalized = self._normalize_weights_excluding_overlays(portfolio_weights, descendant_leaves, 'portfolio')
+            benchmark_normalized = self._normalize_weights_excluding_overlays(benchmark_weights, descendant_leaves, 'benchmark')
             
             self.logger.info(f"Normalized effective weights for {node_id}: portfolio sum={np.sum(portfolio_normalized):.6f}, benchmark sum={np.sum(benchmark_normalized):.6f}")
             
@@ -1348,19 +1467,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                 'portfolio': portfolio_normalized,
                 'benchmark': benchmark_normalized
             }
-        else:
-            # Fallback to equal weights if path calculation failed
-            num_leaves = len(descendant_leaves)
-            equal_weights = np.ones(num_leaves) / num_leaves if num_leaves > 0 else np.array([])
-            
-            self.logger.warning(f"Path calculation failed for {node_id}, using equal weights fallback")
-            self._log_weight_analysis(equal_weights, node_id, 'portfolio_fallback', descendant_leaves)
-            self._log_weight_analysis(equal_weights, node_id, 'benchmark_fallback', descendant_leaves)
-            
-            self._descendant_weights[node_id] = {
-                'portfolio': equal_weights,
-                'benchmark': equal_weights
-            }
+
     
     
     def get_effective_weights(self, node_id: str, return_type: str) -> Optional[np.ndarray]:

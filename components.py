@@ -39,7 +39,6 @@ class PortfolioComponent(ABC):
         
         # Overlay strategy support
         self.is_overlay: bool = False
-        self.parent_operational_weight: Optional[float] = None
 
     
     @abstractmethod
@@ -81,19 +80,10 @@ class PortfolioComponent(ABC):
             self.metric_store.set_metric(self.component_id, metric_name, metric)
     
     def get_operational_weight(self, weight_metric_name: str = 'portfolio_weight') -> float:
-        """Get operational weight for this component (parent weight for overlays)"""
-        if self.is_overlay and self.parent_ids:
-            # For overlay components, try to get parent's operational weight
-            parent_id = next(iter(self.parent_ids))  # Get first parent
-            if self._parent_graph and parent_id in self._parent_graph.components:
-                parent_component = self._parent_graph.components[parent_id]
-                parent_metric = parent_component.get_metric(weight_metric_name)
-                if parent_metric:
-                    return parent_metric.value()
-            # Fallback to stored parent operational weight
-            if self.parent_operational_weight is not None:
-                return self.parent_operational_weight
-            return 1.0  # Default for overlay
+        """Get operational weight for this component (1.0 for overlays)"""
+        if self.is_overlay:
+            # For overlay components, operational weight is always 1.0
+            return 1.0
         else:
             # For non-overlay components, use their own weight
             metric = self.get_metric(weight_metric_name)

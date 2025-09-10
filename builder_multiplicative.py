@@ -520,6 +520,7 @@ class PortfolioBuilderMultiplicative:
             # Collect valid children and their weights
             children_sum = 0.0
             valid_children = []
+            overlay_children = []  # Track overlay children separately
             
             for child_id in children:
                 if child_id not in self._components_info:
@@ -528,10 +529,16 @@ class PortfolioBuilderMultiplicative:
                 original_child = original_weights.get(child_id, {})
                 child_absolute = original_child.get(weight_side)
                 child_info = self._components_info[child_id]
+                is_overlay = child_info.get('is_overlay', False)
                 
-                if child_absolute is not None and not child_info.get('is_overlay', False):
-                    children_sum += child_absolute
-                    valid_children.append((child_id, child_absolute))
+                if child_absolute is not None:
+                    if is_overlay:
+                        # Store overlay children to preserve their operational weights
+                        overlay_children.append((child_id, child_absolute))
+                    else:
+                        # Only include non-overlay children in normalization
+                        children_sum += child_absolute
+                        valid_children.append((child_id, child_absolute))
             
             if children_sum == 0 or not valid_children:
                 continue
@@ -566,7 +573,15 @@ class PortfolioBuilderMultiplicative:
                     child_relative = child_absolute / children_sum
                     self._components_info[child_id][weight_side] = child_relative
                     
-            # Overlays keep their absolute weights for operational tracking
+            # Handle overlay children - they keep special handling for operational weights
+            for child_id, child_absolute in overlay_children:
+                if weight_side == 'portfolio_weight':
+                    # For overlays in allocation context, set weight to 0 (no capital allocation)
+                    # The get_operational_weight() method will handle operational context
+                    self._components_info[child_id][weight_side] = 0.0
+                elif weight_side == 'benchmark_weight':
+                    # Benchmark overlays not supported - set to 0
+                    self._components_info[child_id][weight_side] = 0.0
     
     def _proportional_renormalize(self) -> None:
         """
@@ -728,6 +743,9 @@ class PortfolioBuilderMultiplicative:
             # Store additional data in component metadata
             if comp_info['data']:
                 component.metadata.update(comp_info['data'])
+            
+            # Set overlay flag on component instance (not just in metric store)
+            component.is_overlay = comp_info.get('is_overlay', False)
             
             graph.add_component(component)
             
