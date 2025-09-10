@@ -229,8 +229,11 @@ def analyze_portfolio_risk(
     
     # Set default factor names if not provided
     if factor_names is None:
-        n_factors = model.beta.shape[1]
-        factor_names = [f"factor_{i}" for i in range(n_factors)]
+        if hasattr(model, 'factor_names') and model.factor_names:
+            factor_names = model.factor_names
+        else:
+            n_factors = model.beta.shape[1]
+            factor_names = [f"factor_{i}" for i in range(n_factors)]
     
     # Core risk calculations using RiskCalculator
     portfolio_volatility = RiskCalculator.calculate_portfolio_volatility(model.covar, weights_array)
@@ -438,8 +441,11 @@ def analyze_active_risk(
     
     # Set factor names
     if factor_names is None:
-        n_factors = portfolio_model.beta.shape[1]
-        factor_names = [f"factor_{i}" for i in range(n_factors)]
+        if hasattr(portfolio_model, 'factor_names') and portfolio_model.factor_names:
+            factor_names = portfolio_model.factor_names
+        else:
+            n_factors = portfolio_model.beta.shape[1]
+            factor_names = [f"factor_{i}" for i in range(n_factors)]
     
     # Use active model if provided, otherwise use portfolio model
     if active_model is None:
