@@ -503,13 +503,53 @@ class PortfolioDataProvider:
             raise ValueError(f"Invalid return_type: {return_type}. Must be 'portfolio', 'benchmark', or 'active'")
         
         try:
-            # Use PortfolioGraph methods for return calculation
+            # Use PortfolioGraph methods for return calculation with correct context for overlays
             if return_type == 'portfolio':
-                metric = self._portfolio_graph.portfolio_returns(component_id)
+                # Portfolio returns: use operational context with NO normalization (like computed system)
+                from spark.portfolio.visitors import AggregationVisitor
+                from spark.portfolio.metrics import WeightedAverage
+                
+                # Create WeightedAverage with normalization disabled to match computed system
+                aggregator = WeightedAverage(normalize_weights=False)
+                visitor = AggregationVisitor('portfolio_return', aggregator, self._portfolio_graph.metric_store, 'portfolio_weight', 'operational')
+                
+                # Use the same traversal method as built-in portfolio_returns
+                root_component = self._portfolio_graph.components[component_id]
+                metric = visitor.run_on(root_component)
             elif return_type == 'benchmark':
-                metric = self._portfolio_graph.benchmark_returns(component_id)
+                # Benchmark returns: use allocation context where overlays have weight 0.0
+                metric = self._portfolio_graph.benchmark_returns(component_id, context='allocation')
             elif return_type == 'active':
-                metric = self._portfolio_graph.excess_returns(component_id)
+                # Active returns: manually calculate using correct contexts to match computed system
+                # Portfolio: operational context (overlays = 1.0)
+                portfolio_metric = self._portfolio_graph.portfolio_returns(component_id, context='operational')
+                # Benchmark: allocation context (overlays = 0.0) 
+                benchmark_metric = self._portfolio_graph.benchmark_returns(component_id, context='allocation')
+                
+                if portfolio_metric is None or benchmark_metric is None:
+                    logger.warning(f"Could not calculate active returns for {component_id}: missing portfolio or benchmark data")
+                    return pd.Series(dtype=float, name=f"{component_id}_active")
+                
+                # Calculate active returns manually
+                portfolio_value = portfolio_metric.value()
+                benchmark_value = benchmark_metric.value()
+                
+                if isinstance(portfolio_value, pd.Series) and isinstance(benchmark_value, pd.Series):
+                    # Align series and compute active returns
+                    aligned_portfolio, aligned_benchmark = portfolio_value.align(benchmark_value)
+                    active_value = aligned_portfolio - aligned_benchmark
+                    
+                    # Create metric-like object to match the rest of the code
+                    from spark.portfolio.metrics import TimeSeriesMetric
+                    metric = TimeSeriesMetric(active_value)
+                elif isinstance(portfolio_value, (int, float)) and isinstance(benchmark_value, (int, float)):
+                    # Scalar values
+                    active_value = portfolio_value - benchmark_value
+                    from spark.portfolio.metrics import ScalarMetric
+                    metric = ScalarMetric(active_value)
+                else:
+                    logger.warning(f"Incompatible metric types for active returns calculation: {type(portfolio_value)} vs {type(benchmark_value)}")
+                    return pd.Series(dtype=float, name=f"{component_id}_active")
             
             if metric is None:
                 logger.warning(f"No {return_type} returns found for component: {component_id}")
@@ -671,12 +711,6 @@ class PortfolioDataProvider:
             raise ValueError(f"Invalid return_type: {return_type}. Must be 'portfolio', 'benchmark', or 'active'")
         
         try:
-            # Use collect_metrics to gather returns from all leaf components
-            if return_type == 'active':
-                metric_name = 'excess_return'  # Use appropriate metric name for active returns
-            else:
-                metric_name = f'{return_type}_return'
-            
             # Get root component ID (assuming single root or first available)
             root_id = self._portfolio_graph.root_id
             if root_id is None:
@@ -685,8 +719,16 @@ class PortfolioDataProvider:
                                  if not comp.parent_ids]
                 root_id = root_candidates[0] if root_candidates else list(self._portfolio_graph.components.keys())[0]
             
-            # Collect metrics from all leaf components
-            metrics_dict = self._portfolio_graph.collect_metrics(root_id, metric_name, include_nodes=False)
+            # Get all component IDs (both leaves and nodes)
+            all_component_ids = list(self._portfolio_graph.components.keys())
+            
+            # Use context-aware return calculation for each component
+            metrics_dict = {}
+            for comp_id in all_component_ids:
+                # Get returns using the context-aware method
+                returns_series = self.get_component_returns(comp_id, return_type)
+                if not returns_series.empty:
+                    metrics_dict[comp_id] = returns_series
             
             if not metrics_dict:
                 logger.warning(f"No {return_type} returns found in portfolio graph")

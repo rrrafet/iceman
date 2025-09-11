@@ -1510,9 +1510,11 @@ class DataAccessService:
                 logger.warning(f"Portfolio graph not available for weight calculation")
                 return {"portfolio": 0.0, "benchmark": 0.0, "active": 0.0}
             
-            # Use PortfolioGraph's existing relative_to='root' functionality
-            portfolio_weights = portfolio_graph.portfolio_weights(component_id, relative_to='root')
-            benchmark_weights = portfolio_graph.benchmark_weights(component_id, relative_to='root')
+            # Use PortfolioGraph's existing relative_to='root' functionality with correct contexts
+            # Portfolio weights: use operational context (overlays = 1.0, like computed system) with normalization
+            portfolio_weights = portfolio_graph.portfolio_weights(component_id, weight_type='operational', relative_to='root', normalize=True)
+            # Benchmark weights: use allocation context (overlays = 0.0) with normalization
+            benchmark_weights = portfolio_graph.benchmark_weights(component_id, weight_type='allocation', relative_to='root', normalize=True)
             
             # Get the specific weight for this component
             portfolio_weight = portfolio_weights.get(component_id, 0.0)
@@ -1697,10 +1699,10 @@ class DataAccessService:
                 # - Benchmark operational weights are 0.0 (overlays excluded from benchmark)
                 # - Active operational weights = Portfolio - Benchmark = 1.0 - 0.0 = 1.0
                 return {
-                    "portfolio": "Operational (Fixed 1.0)",
-                    "benchmark": "Operational (Fixed 0.0)", 
-                    "active": "Operational (Fixed 1.0)",
-                    "description": "Overlay: Operational weights used for risk calculations (allocation weights remain 0.0)"
+                    "portfolio": "Operational Context (1.0)",
+                    "benchmark": "Allocation Context (0.0)", 
+                    "active": "Operational - Allocation (1.0)",
+                    "description": "Overlay strategy: Portfolio uses operational weights (1.0), benchmark uses allocation weights (0.0) with overlay-aware normalization"
                 }
             else:
                 # Regular components use weights relative to root
