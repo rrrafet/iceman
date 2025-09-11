@@ -600,8 +600,6 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                     asset_display_names=descendant_names,
                     annualize=self.annualize
                 )
-                if (len(descendant_leaves) > 9):
-                    print("debug")
                 # Store RiskResult objects directly (no complex context)
                 self._node_risk_results[node.component_id] = {
                     'portfolio': portfolio_result,
