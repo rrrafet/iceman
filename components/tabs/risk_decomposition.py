@@ -22,7 +22,7 @@ import plotly.express as px
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 from spark.ui.apps.maverick.utils.formatters import format_basis_points, format_percentage, format_decimal, truncate_component_name, clean_factor_name
-from spark.ui.apps.maverick.utils.colors import get_chart_color, PLOTLY_CONTINUOUS_COLORSCALE
+from spark.ui.apps.maverick.utils.colors import get_chart_color, PLOTLY_CONTINUOUS_COLORSCALE, PLOTLY_DISCRETE_COLORSCALE, PLOTLY_DISCRETE_COLOR_SEQUENCE
 
 def render_risk_decomposition_tab(data_access_service, sidebar_state):
     """
@@ -134,8 +134,6 @@ def render_risk_summary_kpis(risk_data: Dict[str, Any]):
         sum_contributions = factor_risk_contrib + specific_risk_contrib + cross_corr_contrib
         if abs(sum_contributions - total_risk) > 1e-6:
             st.warning(f"Risk decomposition validation: Factor + Idiosyncratic + Cross-Correlation ({format_basis_points(sum_contributions)}) ≠ Total ({format_basis_points(total_risk)})")
-        else:
-            st.success("✓ Euler identity validated: All risk contributions sum to total risk")
     
     else:
         # Portfolio risk: show traditional three components
@@ -202,7 +200,7 @@ def render_factor_analysis_charts(risk_data: Dict[str, Any]):
         # st.markdown("**Factor Risk Contributions**")
         if factor_contributions:
             contributions_chart = create_factor_contributions_chart(factor_contributions)
-            st.plotly_chart(contributions_chart, use_container_width=True)
+            st.plotly_chart(contributions_chart, width='stretch')
         else:
             st.info("Factor contributions data not available")
     
@@ -210,7 +208,7 @@ def render_factor_analysis_charts(risk_data: Dict[str, Any]):
         # st.markdown("**Factor Exposures**")
         if factor_exposures:
             exposures_chart = create_factor_exposures_chart(factor_exposures)
-            st.plotly_chart(exposures_chart, use_container_width=True)
+            st.plotly_chart(exposures_chart, width='stretch')
         else:
             st.info("Factor exposures data not available")
 
@@ -361,7 +359,7 @@ def render_risk_matrices(risk_data: Dict[str, Any]):
         # st.markdown("**Asset-Factor Risk Contributions Matrix**")
         if asset_by_factor_contributions:
             contributions_heatmap = create_asset_factor_contributions_heatmap(asset_by_factor_contributions, risk_data)
-            st.plotly_chart(contributions_heatmap, use_container_width=True)
+            st.plotly_chart(contributions_heatmap, width='stretch')
         else:
             st.info("Asset-factor contributions matrix not available")
     
@@ -369,7 +367,7 @@ def render_risk_matrices(risk_data: Dict[str, Any]):
         # st.markdown("**Weighted Beta Matrix**")
         if weighted_betas:
             weighted_betas_heatmap = create_weighted_betas_heatmap(weighted_betas, risk_data)
-            st.plotly_chart(weighted_betas_heatmap, use_container_width=True)
+            st.plotly_chart(weighted_betas_heatmap, width='stretch')
         else:
             st.info("Weighted betas matrix not available")
 
@@ -413,7 +411,9 @@ def create_asset_factor_contributions_heatmap(asset_by_factor_dict: Dict[str, Di
         colorscale=PLOTLY_CONTINUOUS_COLORSCALE,
         zmid=0,
         hoverongaps=False,
-        colorbar=dict(title="Risk Contribution (bps)"),
+        showscale=False,
+        texttemplate="%{z:.0f}",
+        textfont=dict(size=11, color="black"),
         hovertemplate='<b>Asset:</b> %{y}<br>' +
                       '<b>Factor:</b> %{x}<br>' +
                       '<b>Contribution:</b> %{z:.1f} bps<br>' +
@@ -425,7 +425,8 @@ def create_asset_factor_contributions_heatmap(asset_by_factor_dict: Dict[str, Di
         xaxis_title="Factors",
         yaxis_title="Assets",
         height=max(400, len(asset_names) * 25 + 150),
-        font=dict(size=10),
+        font=dict(size=11),
+        showlegend=False,
         margin=dict(l=120, r=20, t=50, b=50)
     )
     
@@ -467,7 +468,9 @@ def create_weighted_betas_heatmap(weighted_betas_dict: Dict[str, Dict[str, float
         y=display_asset_names,
         colorscale=PLOTLY_CONTINUOUS_COLORSCALE,
         hoverongaps=False,
-        colorbar=dict(title="Weighted Beta"),
+        showscale=False,
+        texttemplate="%{z:.2f}",
+        textfont=dict(size=11, color="black"),
         hovertemplate='<b>Asset:</b> %{y}<br>' +
                       '<b>Factor:</b> %{x}<br>' +
                       '<b>Weighted Beta:</b> %{z:.4f}<br>' +
@@ -479,7 +482,8 @@ def create_weighted_betas_heatmap(weighted_betas_dict: Dict[str, Dict[str, float
         xaxis_title="Factors",
         yaxis_title="Assets",
         height=max(400, len(asset_names) * 25 + 150),
-        font=dict(size=10),
+        font=dict(size=11),
+        showlegend=False,
         margin=dict(l=120, r=20, t=50, b=50)
     )
     

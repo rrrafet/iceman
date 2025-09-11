@@ -67,7 +67,7 @@ def render_compound_returns_chart(data_access_service, sidebar_state):
     
     # axis format should be in percent with 1 decimal
     fig.update_yaxes(tickformat=".1%")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def render_risk_composition(data_access_service, sidebar_state):

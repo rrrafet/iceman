@@ -11,7 +11,7 @@ from spark.ui.apps.maverick.components.tabs.overview import render_overview_tab
 from spark.ui.apps.maverick.components.tabs.risk_decomposition import render_risk_decomposition_tab
 from spark.ui.apps.maverick.components.tabs.allocation_selection import render_allocation_selection_tab
 from spark.ui.apps.maverick.components.tabs.data_explorer import render_data_explorer_tab
-from spark.ui.apps.maverick.components.tabs.stats import render_stats_tab
+from spark.ui.apps.maverick.components.tabs.reconciliation import render_reconciliation_tab
 from spark.ui.apps.maverick.datamodels import FactorDataProvider, PortfolioDataProvider
 
 def initialize_services():
@@ -287,47 +287,54 @@ def run():
             st.markdown("**Date Range:** All Data")
             st.caption("📅 No filter")
     
-    # Tab navigation
+    # Tab navigation with state persistence
     tab_names = [
         "Overview",
         "Risk Decomposition",
-        "Allocation-Selection",
+        "Allocation-Selection", 
         "Data Explorer",
-        "Stats",
-        # "Active Lens", 
-        # "Hierarchy Explorer",
-        # "Timeline",
-        # "Factor Lens",
-        # "Assets",
-        # "Weights & Tilts",
-        # "Decomposition",
-        # "Stats & Distributions", 
-        # "Correlations",
-        # "Validation & Diagnostics",
-        # "Data Management & Integration"
+        "Reconciliation",
     ]
     
-    tabs = st.tabs(tab_names)
+    # Initialize active tab in session state if not exists
+    if 'active_tab' not in st.session_state:
+        st.session_state.active_tab = "Overview"
     
-    # Tab 1 - Overview
-    with tabs[0]:
+    # Initialize the radio widget state to match session state
+    if 'tab_radio' not in st.session_state:
+        st.session_state.tab_radio = st.session_state.active_tab
+    
+    # Define callback function to update active tab
+    def on_tab_change():
+        st.session_state.active_tab = st.session_state.tab_radio
+    
+    # Create tab selector with callback
+    selected_tab = st.radio(
+        "Navigation",
+        options=tab_names,
+        key="tab_radio",
+        horizontal=True,
+        label_visibility="collapsed",
+        on_change=on_tab_change
+    )
+    
+    # Use the selected tab value
+    current_tab = selected_tab
+    
+    # Add some visual separation
+    st.divider()
+    
+    # Render the selected tab content
+    if current_tab == "Overview":
         render_overview_tab(data_access_service, sidebar_state)
-    
-    # Tab 2 - Risk Decomposition
-    with tabs[1]:
+    elif current_tab == "Risk Decomposition":
         render_risk_decomposition_tab(data_access_service, sidebar_state)
-    
-    # Tab 3 - Allocation-Selection
-    with tabs[2]:
+    elif current_tab == "Allocation-Selection":
         render_allocation_selection_tab(data_access_service, sidebar_state)
-    
-    # Tab 4 - Data Explorer
-    with tabs[3]:
+    elif current_tab == "Data Explorer":
         render_data_explorer_tab(data_access_service, sidebar_state)
-    
-    # Tab 5 - Stats
-    with tabs[4]:
-        render_stats_tab(data_access_service, sidebar_state)
+    elif current_tab == "Reconciliation":
+        render_reconciliation_tab(data_access_service, sidebar_state)
 
 
 def main():

@@ -14,26 +14,16 @@ import numpy as np
 from typing import Dict, Any, List, Optional
 
 
-def render_stats_tab(data_access_service, sidebar_state):
+def render_reconciliation_tab(data_access_service, sidebar_state):
     """
-    Render the Stats tab showing hierarchical statistics for data reconciliation.
+    Render the Reconciliation tab showing hierarchical statistics for data reconciliation.
     
     Args:
         data_access_service: Data access service instance
         sidebar_state: Sidebar state containing selected filters
     """
-    st.header("Portfolio Statistics & Reconciliation")
+    st.header("Reconciliation")
     
-    # Add description
-    st.markdown("""
-    This view shows comprehensive statistics for all components in the portfolio hierarchy,
-    helping reconcile that data inputs are correctly transformed through the risk analysis system.
-    
-    **Weight Sources for Raw Volatility Calculations:**
-    - **Regular Components**: Use weights relative to portfolio root for calculations
-    - **Overlay Strategies** (🔄): Use operational weights fixed at 1.0 for portfolio risk, 0.0 for benchmark risk
-    - **Allocation vs Operational**: Overlays have 0.0% allocation weights (prevent double-counting) but 1.0 operational weights (enable risk calculations)
-    """)
     
     # Controls row
     col1, col2, col3 = st.columns([2, 2, 2])
@@ -72,7 +62,7 @@ def render_stats_tab(data_access_service, sidebar_state):
             
             col1, col2 = st.columns([1, 5])
             with col1:
-                if st.button("📥 Export to CSV"):
+                if st.button("Export to CSV"):
                     df = stats_to_dataframe(stats_data, show_computed, show_raw)
                     csv = df.to_csv(index=False)
                     st.download_button(
@@ -83,7 +73,7 @@ def render_stats_tab(data_access_service, sidebar_state):
                     )
             
             with col2:
-                st.caption("Export the statistics table for further analysis. Includes overlay flags and weight source information.")
+                st.caption("Export the statistics table for further analysis.")
             
         except Exception as e:
             st.error(f"Error loading statistics: {e}")
@@ -121,21 +111,19 @@ def render_hierarchical_stats_table(
         computed_stats = stats["computed_stats"]
         raw_stats = stats["raw_stats"]
         
-        # Create indented component name with overlay indicator
+        # Create indented component name
         indent = "  " * level
         if is_overlay:
-            icon = "🔄" if is_leaf else "📁🔄"  # Overlay indicator
             component_type = "Overlay" if is_leaf else "Node (Overlay)"
         else:
-            icon = "📄" if is_leaf else "📁"
             component_type = "Leaf" if is_leaf else "Node"
-        display_name = f"{indent}{icon} {component_id}"
+        display_name = f"{indent}{component_id}"
         
         # Build row data
         row = {
             "Component": display_name,
             "Type": component_type,
-            "Is Overlay": "✅" if is_overlay else "—",
+            "Is Overlay": "Yes" if is_overlay else "No",
             "Portfolio Weight": f"{weights['portfolio']:.2%}" if not np.isnan(weights['portfolio']) else "—",
             "Benchmark Weight": f"{weights['benchmark']:.2%}" if not np.isnan(weights['benchmark']) else "—",
             "Active Weight": f"{weights['active']:.2%}" if not np.isnan(weights['active']) else "—",
@@ -178,7 +166,7 @@ def render_hierarchical_stats_table(
             )
             
             if port_match and bench_match and active_match:
-                row["Status"] = "✅ Match"
+                row["Status"] = "Match"
             else:
                 mismatches = []
                 if not port_match:
@@ -187,7 +175,7 @@ def render_hierarchical_stats_table(
                     mismatches.append("Bench")
                 if not active_match:
                     mismatches.append("Active")
-                row["Status"] = f"⚠️ Mismatch ({', '.join(mismatches)})"
+                row["Status"] = f"Mismatch ({', '.join(mismatches)})"
         
         table_data.append(row)
     
@@ -199,7 +187,7 @@ def render_hierarchical_stats_table(
         # Use Streamlit's dataframe with custom styling
         st.dataframe(
             df,
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
             column_config={
                 "Component": st.column_config.TextColumn(
@@ -213,7 +201,7 @@ def render_hierarchical_stats_table(
                 ),
                 "Is Overlay": st.column_config.TextColumn(
                     "Is Overlay",
-                    help="✅ = Overlay strategy using operational weights (1.0) for risk calculations",
+                    help="Overlay strategy using operational weights (1.0) for risk calculations",
                     width="small",
                 ),
                 "Weight Source": st.column_config.TextColumn(
@@ -231,7 +219,7 @@ def render_hierarchical_stats_table(
         # Regular dataframe display with column config
         st.dataframe(
             df, 
-            use_container_width=True, 
+            width='stretch', 
             hide_index=True,
             column_config={
                 "Component": st.column_config.TextColumn(
@@ -245,7 +233,7 @@ def render_hierarchical_stats_table(
                 ),
                 "Is Overlay": st.column_config.TextColumn(
                     "Is Overlay",
-                    help="✅ = Overlay strategy using operational weights (1.0) for risk calculations",
+                    help="Overlay strategy using operational weights (1.0) for risk calculations",
                     width="small",
                 ),
                 "Weight Source": st.column_config.TextColumn(

@@ -30,7 +30,7 @@ analysis:
   risk_model_type: "factor_based"
 
 ui_defaults:
-  lens: "portfolio"
+  lens: "active"
   show_top_n_factors: 8
   show_top_n_assets: 8
   default_date_range: "latest_year"

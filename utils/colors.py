@@ -1,6 +1,6 @@
 # Import color palette from spark-ui
 try:
-    from spark.ui.colors import COLOR_PALETTE, PLOTLY_CONTINUOUS_COLORSCALE, PLOTLY_CONTINUOUS_COLORSCALE_BLUE_WHITE_RED
+    from spark.ui.colors import COLOR_PALETTE, PLOTLY_CONTINUOUS_COLORSCALE, PLOTLY_CONTINUOUS_COLORSCALE_BLUE_WHITE_RED, PLOTLY_DISCRETE_COLORSCALE, PLOTLY_DISCRETE_COLOR_SEQUENCE
 except ImportError:
     # Fallback color palette if import fails
     COLOR_PALETTE = {
@@ -14,9 +14,30 @@ except ImportError:
     }
     
     PLOTLY_CONTINUOUS_COLORSCALE = [
-        [0.0, COLOR_PALETTE["blue"]],
-        [0.5, COLOR_PALETTE["turquoise"]],
-        [1.0, COLOR_PALETTE["red"]],
+        [0.0, COLOR_PALETTE["copper"]],
+        [0.5, COLOR_PALETTE["green"]],
+        [1.0, COLOR_PALETTE["turquoise"]],
+    ]
+    
+    PLOTLY_DISCRETE_COLORSCALE = [
+        [0.0, COLOR_PALETTE["blue"]],      # Deep blue for most negative
+        [0.15, COLOR_PALETTE["turquoise"]], # Turquoise for negative
+        [0.35, COLOR_PALETTE["green"]],    # Green transitioning to neutral
+        [0.5, "#ffffff"],                  # White for neutral
+        [0.65, COLOR_PALETTE["yellow"]],   # Yellow transitioning from neutral
+        [0.85, COLOR_PALETTE["copper"]],   # Copper for positive
+        [1.0, COLOR_PALETTE["red"]],       # Red for most positive
+    ]
+    
+    # Discrete color sequence for categorical/discrete plotting
+    PLOTLY_DISCRETE_COLOR_SEQUENCE = [
+        COLOR_PALETTE["blue"],      # Deep blue for most negative
+        COLOR_PALETTE["turquoise"], # Turquoise for negative
+        COLOR_PALETTE["green"],     # Green transitioning to neutral
+        "#ffffff",                  # White for neutral
+        COLOR_PALETTE["yellow"],    # Yellow transitioning from neutral
+        COLOR_PALETTE["copper"],    # Copper for positive
+        COLOR_PALETTE["red"],       # Red for most positive
     ]
 
 # Create factor-specific color mapping

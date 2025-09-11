@@ -72,7 +72,7 @@ def render_descendant_returns_chart(data_access_service, component_id: str):
     # Toggle for compounding
     compound_descendants = st.checkbox(
         "Show Compounded Returns",
-        value=False,
+        value=True,
         key="compound_descendants"
     )
     
@@ -119,7 +119,7 @@ def render_descendant_returns_chart(data_access_service, component_id: str):
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Show summary stats
         st.caption(f"Showing {len(plot_data.columns)} descendant components")
@@ -142,7 +142,7 @@ def render_factor_returns_chart(data_access_service):
     # Toggle for compounding
     compound_factors = st.checkbox(
         "Show Compounded Returns",
-        value=False,
+        value=True,
         key="compound_factors"
     )
     
@@ -201,7 +201,7 @@ def render_factor_returns_chart(data_access_service):
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Show summary stats
         st.caption(f"Showing {len(selected_factors)} of {len(available_factors)} available factors")
@@ -259,7 +259,7 @@ def render_scatter_plot_analysis(data_access_service, sidebar_state):
                 selected_nodes = st.multiselect(
                     "Choose multiple nodes:",
                     descendant_ids,
-                    default=descendant_ids[:5] if len(descendant_ids) > 5 else descendant_ids,
+                    default=[],
                     key="selected_nodes_scatter"
                 )
             
@@ -419,7 +419,7 @@ def render_scatter_plot(data: pd.DataFrame, factor_name: str, lens: str, node_id
         legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02)
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     
     # Show summary statistics
     col1, col2, col3 = st.columns(3)
@@ -449,4 +449,4 @@ def render_scatter_plot(data: pd.DataFrame, factor_name: str, lens: str, node_id
         
         if node_correlations:
             corr_df = pd.DataFrame(node_correlations)
-            st.dataframe(corr_df, use_container_width=True, hide_index=True)
+            st.dataframe(corr_df, width='stretch', hide_index=True)

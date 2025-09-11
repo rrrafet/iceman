@@ -137,12 +137,12 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             "ME": "Monthly"
         }
         
-        # Default to business daily
-        default_frequency = "B"
+        # Default to weekly
+        default_frequency = "W-FRI"
         try:
             default_frequency_index = frequency_options.index(default_frequency)
         except ValueError:
-            default_frequency_index = 1
+            default_frequency_index = 2  # W-FRI is at index 2
         
         selected_frequency = st.selectbox(
             "Select data frequency",
@@ -194,7 +194,7 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             st.session_state.date_range_initialized = True
             # Set default preset
             if current_start is None and current_end is None:
-                default_preset = "Daily -1Y"
+                default_preset = "Weekly -3Y"
                 default_start, default_end = get_preset_dates(default_preset)
                 st.session_state.date_range_preset = default_preset
                 st.session_state.date_range_start = default_start
@@ -206,11 +206,11 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
                 st.session_state.date_range_preset = "Custom"
         
         # Determine default preset index
-        current_preset = getattr(st.session_state, 'date_range_preset', 'Daily -1Y')
+        current_preset = getattr(st.session_state, 'date_range_preset', 'Weekly -3Y')
         try:
             default_preset_index = preset_options.index(current_preset)
         except ValueError:
-            default_preset_index = 1
+            default_preset_index = 5  # Weekly -3Y is at index 5
         
         selected_preset = st.selectbox(
             "Select date range preset",
@@ -220,7 +220,7 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         )
         
         # Handle preset change
-        if selected_preset != getattr(st.session_state, 'date_range_preset', 'Daily -1Y'):
+        if selected_preset != getattr(st.session_state, 'date_range_preset', 'Weekly -3Y'):
             st.session_state.date_range_preset = selected_preset
             if selected_preset != "Custom":
                 # Update session state with preset dates
@@ -231,7 +231,7 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         # Calculate dates based on preset or use custom inputs
         if selected_preset == "Custom":
             # Get default values for custom inputs
-            default_start = getattr(st.session_state, 'date_range_start', datetime.now() - timedelta(days=365))
+            default_start = getattr(st.session_state, 'date_range_start', datetime.now() - timedelta(days=365*3))
             default_end = getattr(st.session_state, 'date_range_end', datetime.now())
             
             # Custom date inputs

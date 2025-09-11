@@ -203,7 +203,7 @@ def render_brinson_analysis_table(df: pd.DataFrame, risk_data: Dict[str, Any], c
     # Display the sortable table
     st.dataframe(
         formatted_df,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         height=min(600, (len(formatted_df) + 1) * 35 + 3)
     )
