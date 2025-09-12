@@ -11,6 +11,7 @@ import numpy as np
 import logging
 from pathlib import Path
 import yaml
+from spark.core.resampling_service import create_resampling_service, ResamplingService
 
 if TYPE_CHECKING:
     from spark.portfolio.graph import PortfolioGraph
@@ -44,6 +45,9 @@ class PortfolioDataProvider:
         self.frequency_manager = None
         self.current_frequency = "B"  # Default to business daily
         
+        # Initialize resampling service
+        self.resampling_service = create_resampling_service(native_frequency="B")
+        
         # Date range filtering
         self.date_range_start: Optional[datetime] = None
         self.date_range_end: Optional[datetime] = None
@@ -60,6 +64,8 @@ class PortfolioDataProvider:
         self.frequency_manager = frequency_manager
         if frequency_manager:
             self.current_frequency = frequency_manager.current_frequency
+            # Update resampling service with new frequency
+            self.resampling_service.set_target_frequency(self.current_frequency)
             logger.info(f"PortfolioDataProvider frequency set to: {self.current_frequency}")
     
     def set_date_range(self, start_date: Optional[datetime], end_date: Optional[datetime]):
@@ -86,7 +92,7 @@ class PortfolioDataProvider:
     
     def _resample_returns_series(self, series: pd.Series) -> pd.Series:
         """
-        Resample returns series using compound return calculation.
+        Resample returns series using centralized resampling service.
         
         Args:
             series: Returns series to resample
@@ -94,24 +100,18 @@ class PortfolioDataProvider:
         Returns:
             Resampled series or original series if no resampling needed
         """
-        if not self.frequency_manager or not self.frequency_manager.is_resampled or series.empty:
+        if series.empty:
             return series
         
-        freq = self.frequency_manager.current_frequency
         try:
-            # Use compound return calculation: (1+r).prod() - 1
-            resampled = series.resample(freq).apply(lambda x: (1 + x).prod() - 1)
-            resampled.name = series.name
-            logger.debug(f"PortfolioDataProvider resampled {series.name} from {len(series)} to {len(resampled)} observations at {freq}")
-            return resampled.dropna()
-            
+            return self.resampling_service.resample_series(series)
         except Exception as e:
             logger.error(f"Error resampling series {series.name} in PortfolioDataProvider: {e}")
             return series
     
     def _resample_returns_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Resample returns DataFrame using compound return calculation.
+        Resample returns DataFrame using centralized resampling service.
         
         Args:
             df: Returns DataFrame to resample
@@ -119,16 +119,11 @@ class PortfolioDataProvider:
         Returns:
             Resampled DataFrame or original DataFrame if no resampling needed
         """
-        if not self.frequency_manager or not self.frequency_manager.is_resampled or df.empty:
+        if df.empty:
             return df
         
-        freq = self.frequency_manager.current_frequency
         try:
-            # Apply compound return calculation to each column
-            resampled = df.resample(freq).apply(lambda x: (1 + x).prod() - 1)
-            logger.debug(f"PortfolioDataProvider resampled DataFrame from {len(df)} to {len(resampled)} observations at {freq}")
-            return resampled.dropna()
-            
+            return self.resampling_service.resample_dataframe(df)
         except Exception as e:
             logger.error(f"Error resampling DataFrame in PortfolioDataProvider: {e}")
             return df

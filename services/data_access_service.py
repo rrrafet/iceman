@@ -11,6 +11,7 @@ import logging
 
 from spark.ui.apps.maverick.services.risk_analysis_service import RiskAnalysisService
 from spark.risk.annualizer import RiskAnnualizer
+from spark.core.resampling_service import create_resampling_service, ResamplingService
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,9 @@ class DataAccessService:
         
         # Initialize frequency manager
         self.frequency_manager = FrequencyManager()
+        
+        # Initialize central resampling service
+        self.resampling_service = create_resampling_service(native_frequency="B")
         
         # Initialize date range filtering
         self.date_range_start: Optional[datetime] = None
@@ -228,6 +232,9 @@ class DataAccessService:
         try:
             logger.info("Starting system re-initialization for frequency change")
             
+            # Update central resampling service with new frequency
+            self.resampling_service.set_target_frequency(self.frequency_manager.current_frequency)
+            
             # Clear portfolio graph and risk computation caches
             if hasattr(self.risk_analysis_service, '_portfolio_graph'):
                 self.risk_analysis_service._portfolio_graph = None
@@ -266,10 +273,10 @@ class DataAccessService:
     # Note: Date filtering is now handled at the data provider level during data loading
     # This ensures a single source of truth for all filtered data
 
-    # Resampling helper methods
+    # Resampling helper methods (using central resampling service)
     def _resample_returns_series(self, series: pd.Series) -> pd.Series:
         """
-        Resample returns series using compound return calculation.
+        Resample returns series using central resampling service.
         
         Args:
             series: Returns series to resample
@@ -277,24 +284,18 @@ class DataAccessService:
         Returns:
             Resampled series or original series if no resampling needed
         """
-        if not self.frequency_manager.is_resampled or series.empty:
+        if series.empty:
             return series
         
-        freq = self.frequency_manager.current_frequency
         try:
-            # Use compound return calculation: (1+r).prod() - 1
-            resampled = series.resample(freq).apply(lambda x: (1 + x).prod() - 1)
-            resampled.name = series.name
-            logger.debug(f"Resampled series {series.name} from {len(series)} to {len(resampled)} observations at {freq} frequency")
-            return resampled.dropna()
-            
+            return self.resampling_service.resample_series(series)
         except Exception as e:
-            logger.error(f"Error resampling series {series.name} to {freq}: {e}")
+            logger.error(f"Error resampling series {series.name}: {e}")
             return series
     
     def _resample_returns_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Resample returns DataFrame using compound return calculation.
+        Resample returns DataFrame using central resampling service.
         
         Args:
             df: Returns DataFrame to resample
@@ -302,18 +303,13 @@ class DataAccessService:
         Returns:
             Resampled DataFrame or original DataFrame if no resampling needed
         """
-        if not self.frequency_manager.is_resampled or df.empty:
+        if df.empty:
             return df
         
-        freq = self.frequency_manager.current_frequency
         try:
-            # Apply compound return calculation to each column
-            resampled = df.resample(freq).apply(lambda x: (1 + x).prod() - 1)
-            logger.debug(f"Resampled DataFrame from {len(df)} to {len(resampled)} observations at {freq} frequency")
-            return resampled.dropna()
-            
+            return self.resampling_service.resample_dataframe(df)
         except Exception as e:
-            logger.error(f"Error resampling DataFrame to {freq}: {e}")
+            logger.error(f"Error resampling DataFrame: {e}")
             return df
     
     # Time series access methods

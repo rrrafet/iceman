@@ -1,105 +1,141 @@
 """
-Stats Tab Component - Hierarchical statistics view for data reconciliation.
+Reconciliation Tab - Volatility Validation of Risk Calculation Inputs.
 
-This component displays a hierarchical table of portfolio statistics showing:
-- Portfolio/benchmark/active weights relative to root
-- Computed statistics from PortfolioGraph
-- Raw time series statistics
-- Reconciliation indicators
+This component validates that volatilities calculated from the exact filtered and
+resampled data that goes into risk calculations match the computed risk values:
+- Uses the same DataAccessService methods that feed risk calculations
+- Compares computed volatilities from risk engine vs empirical from processed data
+- Ensures data consistency between risk inputs and risk outputs
+- Validates across all lenses (portfolio, benchmark, active) and frequencies
 """
 
 import pandas as pd
 import streamlit as st
 import numpy as np
+import logging
 from typing import Dict, Any, List, Optional
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 def render_reconciliation_tab(data_access_service, sidebar_state):
     """
-    Render the Reconciliation tab showing hierarchical statistics for data reconciliation.
+    Render volatility reconciliation comparing risk calculation inputs vs outputs.
     
     Args:
-        data_access_service: Data access service instance
-        sidebar_state: Sidebar state containing selected filters
+        data_access_service: Data access service with ResamplingService integration
+        sidebar_state: Sidebar state with frequency and date range settings
     """
-    st.header("Reconciliation")
+    st.header("Volatility Reconciliation")
+    st.caption("Validates that computed risk values match empirical volatilities from the same filtered/resampled data used in risk calculations")
     
+    # Show current data processing settings
+    with st.expander("Data Processing Settings", expanded=False):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Frequency", sidebar_state.frequency)
+        with col2:
+            try:
+                freq_status = data_access_service.get_frequency_status()
+                resampling_status = "Resampled" if freq_status.get('is_resampled', False) else "Native"
+                st.metric("Processing", resampling_status)
+            except Exception as e:
+                logger.warning(f"Could not get frequency status: {e}")
+                st.metric("Processing", "Unknown")
+        with col3:
+            if sidebar_state.date_range_start and sidebar_state.date_range_end:
+                days = (sidebar_state.date_range_end - sidebar_state.date_range_start).days
+                st.metric("Period", f"{days/365:.1f} years")
     
-    # Controls row
-    col1, col2, col3 = st.columns([2, 2, 2])
+    # Validation controls
+    col1, col2 = st.columns([2, 1])
     
     with col1:
-        show_computed = st.checkbox("Show Computed Stats", value=True, 
-                                   help="Display statistics from risk computation engine using PortfolioGraph")
+        st.info("**Validation Process**: Compares computed volatilities from risk engine against empirical volatilities calculated from the exact same filtered/resampled return data that feeds into risk calculations")
     
     with col2:
-        show_raw = st.checkbox("Show Raw Stats", value=True,
-                              help="Display statistics from raw time series data. For overlays, uses operational weights (1.0) for portfolio risk calculations.")
+        tolerance_basis_points = st.number_input(
+            "Tolerance (basis points)", 
+            min_value=1, 
+            max_value=100, 
+            value=10,
+            help="Tolerance for volatility matching (10 bp = 0.1%)"
+        )
+        tolerance = tolerance_basis_points / 10000  # Convert bp to decimal
     
-    with col3:
-        highlight_discrepancies = st.checkbox("Highlight Discrepancies", value=True,
-                                             help="Highlight differences between computed and raw stats. Overlays may show expected differences due to operational weight handling.")
-    
-    # Get hierarchical statistics
-    with st.spinner("Loading hierarchical statistics..."):
+    # Get and validate hierarchical statistics
+    with st.spinner("Loading volatility statistics from filtered/resampled data..."):
         try:
             stats_data = data_access_service.get_hierarchical_stats()
             
             if not stats_data:
-                st.warning("No statistics data available")
+                st.warning("No statistics data available - check data loading and date range settings")
                 return
             
-            # Render the hierarchical table
-            render_hierarchical_stats_table(
-                stats_data, 
-                show_computed=show_computed,
-                show_raw=show_raw,
-                highlight_discrepancies=highlight_discrepancies
-            )
+            # Show processing summary
+            st.success(f"Loaded {len(stats_data)} components for volatility validation")
+            
+            # Render the volatility comparison table
+            render_volatility_validation_table(stats_data, tolerance)
             
             # Export functionality
             st.divider()
             
-            col1, col2 = st.columns([1, 5])
+            col1, col2 = st.columns([1, 3])
             with col1:
-                if st.button("Export to CSV"):
-                    df = stats_to_dataframe(stats_data, show_computed, show_raw)
+                if st.button("Export Validation Results"):
+                    df = create_validation_export(stats_data, tolerance, sidebar_state.frequency)
                     csv = df.to_csv(index=False)
                     st.download_button(
                         label="Download CSV",
                         data=csv,
-                        file_name="portfolio_stats.csv",
+                        file_name=f"volatility_validation_{sidebar_state.frequency}_{tolerance_basis_points}bp.csv",
                         mime="text/csv"
                     )
             
             with col2:
-                st.caption("Export the statistics table for further analysis.")
-            
+                st.caption("Export detailed volatility validation results including differences and match status")
+                
         except Exception as e:
-            st.error(f"Error loading statistics: {e}")
+            st.error(f"Error loading volatility statistics: {e}")
+            logger.error(f"Reconciliation tab error: {e}")
+            
+            # Show troubleshooting info
+            with st.expander("Troubleshooting", expanded=False):
+                st.write("**Common issues:**")
+                st.write("- Data providers not properly initialized with frequency/date settings")
+                st.write("- Selected date range has insufficient data for the chosen frequency") 
+                st.write("- Risk computation service not available or failed initialization")
+                st.write("- Mismatch between sidebar settings and data service state")
+                
+                # Show service status if possible
+                try:
+                    status = data_access_service.get_service_status()
+                    st.json(status)
+                except:
+                    st.write("Could not retrieve service status for debugging")
 
 
-def render_hierarchical_stats_table(
+def render_volatility_validation_table(
     stats_data: List[Dict[str, Any]], 
-    show_computed: bool = True,
-    show_raw: bool = True,
-    highlight_discrepancies: bool = True
+    tolerance: float = 0.001
 ):
     """
-    Render the hierarchical statistics table with proper formatting.
+    Render table comparing computed vs empirical volatilities from risk calculation inputs.
     
     Args:
         stats_data: List of component statistics in hierarchical order
-        show_computed: Whether to show computed statistics columns
-        show_raw: Whether to show raw time series statistics columns
-        highlight_discrepancies: Whether to highlight discrepancies
+        tolerance: Tolerance for volatility matching (decimal)
     """
     if not stats_data:
-        st.info("No data to display")
+        st.warning("No data available for volatility validation")
         return
     
-    # Build the display data
+    # Build volatility comparison data
     table_data = []
+    match_counts = {"portfolio": 0, "benchmark": 0, "active": 0}
+    total_counts = {"portfolio": 0, "benchmark": 0, "active": 0}
     
     for stats in stats_data:
         component_id = stats["component_id"]
@@ -107,265 +143,239 @@ def render_hierarchical_stats_table(
         is_leaf = stats.get("is_leaf", True)
         is_overlay = stats.get("is_overlay", False)
         weights = stats["weights"]
-        weight_source = stats.get("weight_source", {})
         computed_stats = stats["computed_stats"]
         raw_stats = stats["raw_stats"]
         
         # Create indented component name
         indent = "  " * level
-        if is_overlay:
-            component_type = "Overlay" if is_leaf else "Node (Overlay)"
-        else:
-            component_type = "Leaf" if is_leaf else "Node"
+        component_type = "Overlay" if is_overlay else ("Leaf" if is_leaf else "Node")
         display_name = f"{indent}{component_id}"
         
-        # Build row data
+        # Build row focusing on volatility validation
         row = {
             "Component": display_name,
             "Type": component_type,
-            "Is Overlay": "Yes" if is_overlay else "No",
-            "Portfolio Weight": f"{weights['portfolio']:.2%}" if not np.isnan(weights['portfolio']) else "—",
-            "Benchmark Weight": f"{weights['benchmark']:.2%}" if not np.isnan(weights['benchmark']) else "—",
-            "Active Weight": f"{weights['active']:.2%}" if not np.isnan(weights['active']) else "—",
-            "Weight Source": weight_source.get("description", "Root Relative") if weight_source else "Root Relative",
+            "Portfolio Weight": format_weight(weights["portfolio"]),
+            "Benchmark Weight": format_weight(weights["benchmark"]), 
+            "Active Weight": format_weight(weights["active"]),
         }
         
-        # Add computed statistics if requested
-        if show_computed:
-            row.update({
-                "Computed Port Vol": format_stat(computed_stats["portfolio"]["std"]),
-                "Computed Bench Vol": format_stat(computed_stats["benchmark"]["std"]),
-                "Computed Active Vol": format_stat(computed_stats["active"]["std"]),
-            })
+        # Add volatility comparisons and validation for each lens
+        lenses = ["portfolio", "benchmark", "active"]
+        lens_labels = {"portfolio": "Port", "benchmark": "Bench", "active": "Active"}
         
-        # Add raw statistics if requested
-        if show_raw:
-            row.update({
-                "Raw Port Mean": format_stat(raw_stats["portfolio"]["mean"]),
-                "Raw Port Vol": format_stat(raw_stats["portfolio"]["std"]),
-                "Raw Bench Mean": format_stat(raw_stats["benchmark"]["mean"]),
-                "Raw Bench Vol": format_stat(raw_stats["benchmark"]["std"]),
-                "Raw Active Mean": format_stat(raw_stats["active"]["mean"]),
-                "Raw Active Vol": format_stat(raw_stats["active"]["std"]),
-            })
-        
-        # Add reconciliation status if both computed and raw are shown
-        if show_computed and show_raw and highlight_discrepancies:
-            # Check for discrepancies in volatility (standard deviation)
-            port_match = check_stat_match(
-                computed_stats["portfolio"]["std"], 
-                raw_stats["portfolio"]["std"]
-            )
-            bench_match = check_stat_match(
-                computed_stats["benchmark"]["std"],
-                raw_stats["benchmark"]["std"]
-            )
-            active_match = check_stat_match(
-                computed_stats["active"]["std"],
-                raw_stats["active"]["std"]
-            )
+        for lens in lenses:
+            computed_vol = computed_stats[lens]["std"]
+            empirical_vol = raw_stats[lens]["std"]
             
-            if port_match and bench_match and active_match:
-                row["Status"] = "Match"
+            # Format volatilities
+            computed_str = format_volatility(computed_vol)
+            empirical_str = format_volatility(empirical_vol)
+            
+            # Validate match and track statistics
+            matches = validate_volatility_match(computed_vol, empirical_vol, tolerance)
+            
+            # Track validation statistics
+            if not (np.isnan(computed_vol) and np.isnan(empirical_vol)):
+                total_counts[lens] += 1
+                if matches:
+                    match_counts[lens] += 1
+            
+            # Calculate difference for display
+            if not np.isnan(computed_vol) and not np.isnan(empirical_vol):
+                diff_bp = (empirical_vol - computed_vol) * 10000
+                diff_str = f"{diff_bp:+.1f}bp"
+                match_str = "MATCH" if matches else "DIFF"
             else:
-                mismatches = []
-                if not port_match:
-                    mismatches.append("Port")
-                if not bench_match:
-                    mismatches.append("Bench")
-                if not active_match:
-                    mismatches.append("Active")
-                row["Status"] = f"Mismatch ({', '.join(mismatches)})"
+                diff_str = "N/A"
+                match_str = "N/A"
+            
+            # Add columns for this lens
+            row[f"{lens_labels[lens]} Computed Vol"] = computed_str
+            row[f"{lens_labels[lens]} Empirical Vol"] = empirical_str
+            row[f"{lens_labels[lens]} Difference"] = diff_str
+            row[f"{lens_labels[lens]} Status"] = match_str
         
         table_data.append(row)
     
-    # Create DataFrame
+    # Create and display DataFrame
     df = pd.DataFrame(table_data)
     
-    # Apply styling if highlighting discrepancies
-    if highlight_discrepancies and "Status" in df.columns:
-        # Use Streamlit's dataframe with custom styling
-        st.dataframe(
-            df,
-            width='stretch',
-            hide_index=True,
-            column_config={
-                "Component": st.column_config.TextColumn(
-                    "Component",
-                    width="large",
-                ),
-                "Type": st.column_config.TextColumn(
-                    "Type",
-                    help="Component type: Leaf/Node components or Overlay strategies",
-                    width="small",
-                ),
-                "Is Overlay": st.column_config.TextColumn(
-                    "Is Overlay",
-                    help="Overlay strategy using operational weights (1.0) for risk calculations",
-                    width="small",
-                ),
-                "Weight Source": st.column_config.TextColumn(
-                    "Weight Source", 
-                    help="Source of weights used for raw volatility calculations",
-                    width="medium",
-                ),
-                "Status": st.column_config.TextColumn(
-                    "Status",
-                    width="small",
-                ),
-            }
-        )
-    else:
-        # Regular dataframe display with column config
-        st.dataframe(
-            df, 
-            width='stretch', 
-            hide_index=True,
-            column_config={
-                "Component": st.column_config.TextColumn(
-                    "Component",
-                    width="large",
-                ),
-                "Type": st.column_config.TextColumn(
-                    "Type",
-                    help="Component type: Leaf/Node components or Overlay strategies",
-                    width="small",
-                ),
-                "Is Overlay": st.column_config.TextColumn(
-                    "Is Overlay",
-                    help="Overlay strategy using operational weights (1.0) for risk calculations",
-                    width="small",
-                ),
-                "Weight Source": st.column_config.TextColumn(
-                    "Weight Source", 
-                    help="Source of weights used for raw volatility calculations",
-                    width="medium",
-                ),
-            }
-        )
+    if df.empty:
+        st.warning("No data available for volatility comparison")
+        return
     
-    # Summary statistics
+    st.dataframe(
+        df,
+        width='stretch',
+        hide_index=True,
+        column_config={
+            "Component": st.column_config.TextColumn(
+                "Component",
+                width="medium",
+                help="Portfolio components in hierarchical structure"
+            ),
+            "Type": st.column_config.TextColumn(
+                "Type", 
+                width="small",
+                help="Leaf components, Node aggregations, or Overlay strategies"
+            ),
+        }
+    )
+    
+    # Validation Summary
     st.divider()
+    st.subheader("Validation Summary")
+    
+    # Overall statistics
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Total Components", len(stats_data))
+        st.metric("Components", len(stats_data))
     
     with col2:
-        leaf_count = sum(1 for s in stats_data if s["is_leaf"])
-        st.metric("Leaf Components", leaf_count)
+        overlay_count = sum(1 for s in stats_data if s.get("is_overlay", False))
+        st.metric("Overlays", overlay_count)
     
     with col3:
-        node_count = len(stats_data) - leaf_count
-        st.metric("Node Components", node_count)
+        total_validations = sum(total_counts.values())
+        st.metric("Total Validations", total_validations)
     
     with col4:
-        if "Status" in df.columns:
-            match_count = sum(1 for _, row in df.iterrows() if "Match" in str(row.get("Status", "")))
-            match_pct = (match_count / len(df)) * 100 if len(df) > 0 else 0
-            st.metric("Reconciliation Rate", f"{match_pct:.1f}%")
-
-
-def format_stat(value: float, precision: int = 2) -> str:
-    """
-    Format a statistical value for display.
+        if total_validations > 0:
+            total_matches = sum(match_counts.values()) 
+            overall_match_pct = (total_matches / total_validations) * 100
+            st.metric("Overall Match Rate", f"{overall_match_pct:.1f}%")
+        else:
+            st.metric("Overall Match Rate", "No data")
     
-    Args:
-        value: The value to format
-        precision: Number of decimal places for percentage
-        
-    Returns:
-        Formatted string
-    """
+    # Lens-specific validation rates
+    st.subheader("Validation by Lens")
+    col1, col2, col3 = st.columns(3)
+    
+    for i, (lens, label) in enumerate(zip(["portfolio", "benchmark", "active"], 
+                                         ["Portfolio", "Benchmark", "Active"])):
+        with [col1, col2, col3][i]:
+            if total_counts[lens] > 0:
+                match_pct = (match_counts[lens] / total_counts[lens]) * 100
+                st.metric(
+                    f"{label} Match Rate",
+                    f"{match_pct:.1f}%",
+                    help=f"{match_counts[lens]} of {total_counts[lens]} components match within tolerance"
+                )
+                
+                if match_pct < 90:
+                    st.error(f"Low validation rate for {lens} lens")
+                elif match_pct < 100:
+                    st.warning(f"Some {lens} components don't validate")
+                else:
+                    st.success(f"Perfect {lens} validation")
+            else:
+                st.metric(f"{label} Match Rate", "No data")
+
+
+def format_weight(value: float) -> str:
+    """Format weight value for display."""
     if np.isnan(value) or value is None:
-        return "—"
-    
-    # Convert to percentage (assuming annualized decimal values)
+        return "N/A"
+    return f"{value:.2%}"
+
+
+def format_volatility(value: float, precision: int = 1) -> str:
+    """Format volatility value for display."""
+    if np.isnan(value) or value is None:
+        return "N/A"
     return f"{value:.{precision}%}"
 
 
-def check_stat_match(computed: float, raw: float, tolerance: float = 0.001) -> bool:
+def validate_volatility_match(computed: float, empirical: float, tolerance: float = 0.001) -> bool:
     """
-    Check if computed and raw statistics match within tolerance.
+    Validate that computed and empirical volatilities match within tolerance.
+    
+    This ensures that the risk calculation inputs (empirical volatilities from 
+    filtered/resampled data) match the risk calculation outputs (computed volatilities).
     
     Args:
-        computed: Computed statistic value
-        raw: Raw statistic value
-        tolerance: Tolerance for comparison (default 0.1%)
+        computed: Computed volatility from risk engine
+        empirical: Empirical volatility from same filtered/resampled data
+        tolerance: Tolerance for comparison (decimal, e.g. 0.001 = 10bp)
         
     Returns:
-        True if values match within tolerance
+        True if volatilities match within tolerance
     """
     # Handle NaN cases
-    if np.isnan(computed) and np.isnan(raw):
+    if np.isnan(computed) and np.isnan(empirical):
         return True
-    if np.isnan(computed) or np.isnan(raw):
+    if np.isnan(computed) or np.isnan(empirical):
         return False
     
-    # Check if both are effectively zero
-    if abs(computed) < tolerance and abs(raw) < tolerance:
+    # Check if both are effectively zero (very low volatility)
+    if abs(computed) < tolerance/10 and abs(empirical) < tolerance/10:
         return True
     
-    # Check relative difference
-    if computed != 0:
-        relative_diff = abs((raw - computed) / computed)
-        return relative_diff < tolerance
-    
-    return False
+    # Check absolute difference for volatilities
+    absolute_diff = abs(empirical - computed)
+    return absolute_diff <= tolerance
 
 
-def stats_to_dataframe(
+def create_validation_export(
     stats_data: List[Dict[str, Any]], 
-    include_computed: bool = True,
-    include_raw: bool = True
+    tolerance: float,
+    frequency: str
 ) -> pd.DataFrame:
     """
-    Convert hierarchical statistics to a flat DataFrame for export.
+    Create detailed DataFrame for exporting validation results.
     
     Args:
         stats_data: List of component statistics
-        include_computed: Whether to include computed statistics
-        include_raw: Whether to include raw statistics
+        tolerance: Tolerance used for validation
+        frequency: Current data frequency
         
     Returns:
-        DataFrame suitable for export
+        DataFrame with comprehensive validation results
     """
     rows = []
     
     for stats in stats_data:
-        weight_source = stats.get("weight_source", {})
+        component_id = stats["component_id"]
+        level = stats.get("level", 0)
+        is_leaf = stats.get("is_leaf", True) 
+        is_overlay = stats.get("is_overlay", False)
+        weights = stats["weights"]
+        computed_stats = stats["computed_stats"]
+        raw_stats = stats["raw_stats"]
+        
+        # Base row data
         row = {
-            "component_id": stats["component_id"],
-            "level": stats.get("level", 0),
-            "is_leaf": stats.get("is_leaf", True),
-            "is_overlay": stats.get("is_overlay", False),
-            "portfolio_weight": stats["weights"]["portfolio"],
-            "benchmark_weight": stats["weights"]["benchmark"],
-            "active_weight": stats["weights"]["active"],
-            "portfolio_weight_source": weight_source.get("portfolio", "Root Relative"),
-            "benchmark_weight_source": weight_source.get("benchmark", "Root Relative"),
-            "active_weight_source": weight_source.get("active", "Root Relative"),
-            "weight_source_description": weight_source.get("description", "Root Relative"),
+            "component_id": component_id,
+            "hierarchy_level": level,
+            "is_leaf": is_leaf,
+            "is_overlay": is_overlay,
+            "frequency": frequency,
+            "tolerance_bp": tolerance * 10000,
+            "portfolio_weight": weights["portfolio"],
+            "benchmark_weight": weights["benchmark"],
+            "active_weight": weights["active"],
         }
         
-        if include_computed:
+        # Add detailed volatility comparison for each lens
+        for lens in ["portfolio", "benchmark", "active"]:
+            computed_vol = computed_stats[lens]["std"]
+            empirical_vol = raw_stats[lens]["std"]
+            matches = validate_volatility_match(computed_vol, empirical_vol, tolerance)
+            
+            # Calculate difference in basis points
+            if not np.isnan(computed_vol) and not np.isnan(empirical_vol):
+                difference_bp = (empirical_vol - computed_vol) * 10000
+            else:
+                difference_bp = np.nan
+            
             row.update({
-                "computed_portfolio_mean": stats["computed_stats"]["portfolio"]["mean"],
-                "computed_portfolio_std": stats["computed_stats"]["portfolio"]["std"],
-                "computed_benchmark_mean": stats["computed_stats"]["benchmark"]["mean"],
-                "computed_benchmark_std": stats["computed_stats"]["benchmark"]["std"],
-                "computed_active_mean": stats["computed_stats"]["active"]["mean"],
-                "computed_active_std": stats["computed_stats"]["active"]["std"],
-            })
-        
-        if include_raw:
-            row.update({
-                "raw_portfolio_mean": stats["raw_stats"]["portfolio"]["mean"],
-                "raw_portfolio_std": stats["raw_stats"]["portfolio"]["std"],
-                "raw_benchmark_mean": stats["raw_stats"]["benchmark"]["mean"],
-                "raw_benchmark_std": stats["raw_stats"]["benchmark"]["std"],
-                "raw_active_mean": stats["raw_stats"]["active"]["mean"],
-                "raw_active_std": stats["raw_stats"]["active"]["std"],
+                f"{lens}_computed_volatility": computed_vol,
+                f"{lens}_empirical_volatility": empirical_vol, 
+                f"{lens}_difference_bp": difference_bp,
+                f"{lens}_validates": matches,
+                f"{lens}_within_tolerance": abs(difference_bp) <= tolerance * 10000 if not np.isnan(difference_bp) else False
             })
         
         rows.append(row)
