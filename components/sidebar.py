@@ -62,15 +62,16 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         # Risk Model selector
         st.subheader("Risk Model")
         available_models = config_service.get_available_risk_models()
-        
-        # Get current risk model from data access service
+        print(f"Available risk models: {available_models}")
+        # Get current risk model
         current_risk_model = data_access_service.get_current_risk_model()
+        print(f"Current risk model from data service: {current_risk_model}")
         if not current_risk_model:
             current_risk_model = config_service.get_default_risk_model()
         
         # Find current index
         try:
-            default_index = available_models.index(current_risk_model)
+            default_index = available_models.index(current_risk_model) if current_risk_model in available_models else 0
         except (ValueError, AttributeError):
             default_index = 0
         
@@ -81,7 +82,7 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             key="risk_model_selector",
             help="Select a factor risk model to analyze portfolio risk"
         )
-        
+        print(f"Selected risk model: {selected_risk_model}")
         st.divider()
         
         # Component selector
@@ -132,16 +133,16 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         st.divider()
         
         # Enhanced Frequency selector with ResamplingService integration
-        st.subheader("📊 Data Frequency")
+        st.subheader("Data Frequency")
         
         # Enhanced frequency options including quarterly and annual
         frequency_options = ["B", "W-FRI", "ME", "Q", "A"]
         frequency_labels = {
-            "B": "📈 Business Daily (Native) - No resampling",
-            "W-FRI": "📅 Weekly (Friday) - Compound returns", 
-            "ME": "📊 Monthly End - Compound returns",
-            "Q": "📋 Quarterly - Compound returns",
-            "A": "📆 Annual - Compound returns"
+            "B": "Business Daily (Native) - No resampling",
+            "W-FRI": "Weekly (Friday) - Compound returns", 
+            "ME": "Monthly End - Compound returns",
+            "Q": "Quarterly - Compound returns",
+            "A": "Annual - Compound returns"
         }
         
         frequency_descriptions = {
@@ -152,18 +153,27 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             "A": "Annual resampling - highest level overview"
         }
         
-        # Get current frequency from data service to maintain state
-        try:
-            current_frequency = data_access_service.get_current_frequency()
-            if current_frequency not in frequency_options:
-                current_frequency = "W-FRI"  # Fallback to weekly
-        except:
-            current_frequency = "W-FRI"
+        # Initialize session state for frequency if not exists
+        if 'frequency_key' not in st.session_state:
+            st.session_state.frequency_key = "W-FRI"  # Default to weekly
+        
+        # Use session state as single source of truth
+        default_frequency = st.session_state.frequency_key
+        
+        # Ensure the stored frequency is valid
+        if default_frequency not in frequency_options:
+            default_frequency = "W-FRI"
+            st.session_state.frequency_key = default_frequency
         
         try:
-            default_frequency_index = frequency_options.index(current_frequency)
+            default_frequency_index = frequency_options.index(default_frequency)
         except ValueError:
             default_frequency_index = 1  # W-FRI is at index 1
+            st.session_state.frequency_key = "W-FRI"
+        
+        def on_frequency_change():
+            """Callback to update session state when frequency changes."""
+            st.session_state.frequency_key = st.session_state.frequency_selector
         
         selected_frequency = st.selectbox(
             "Select data frequency for analysis",
@@ -171,7 +181,8 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             index=default_frequency_index,
             format_func=lambda x: frequency_labels.get(x, x),
             key="frequency_selector",
-            help="Choose how to aggregate return data. Higher frequencies provide more detail but may be noisier."
+            help="Choose how to aggregate return data. Higher frequencies provide more detail but may be noisier.",
+            on_change=on_frequency_change
         )
         
         # Show frequency description
@@ -179,14 +190,12 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         
         # Show resampling status
         if selected_frequency == "B":
-            st.success("✅ Native frequency - no resampling required")
-        else:
-            st.info(f"🔄 Data will be resampled from business daily to {frequency_labels[selected_frequency].split(' - ')[0].replace('📈 ', '').replace('📅 ', '').replace('📊 ', '').replace('📋 ', '').replace('📆 ', '')}")
+            st.success("Native frequency - no resampling required")
         
         st.divider()
         
         # Simplified Date Range selector  
-        st.subheader("📅 Analysis Period")
+        st.subheader("Analysis Period")
         
         def get_date_range(period_key: str) -> tuple[datetime, datetime]:
             """Calculate start and end dates for common analysis periods."""
@@ -194,30 +203,25 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             
             if period_key == "1Y":
                 start_date = end_date - timedelta(days=365)
-                period_name = "Last 1 Year"
             elif period_key == "3Y":
                 start_date = end_date - timedelta(days=365 * 3) 
-                period_name = "Last 3 Years"
             elif period_key == "5Y":
                 start_date = end_date - timedelta(days=365 * 5)
-                period_name = "Last 5 Years"
             elif period_key == "ITD":
                 # Use a very early date for inception-to-date
                 start_date = datetime(2000, 1, 1)
-                period_name = "Inception to Date"
             else:  # Custom
                 start_date = end_date - timedelta(days=365 * 3)  # Default fallback
-                period_name = "Custom Range"
             
             return start_date, end_date
         
         # Simplified preset options focused on common analysis periods
         period_options = {
-            "3Y": "📊 Last 3 Years (Recommended)",
-            "1Y": "📈 Last 1 Year", 
-            "5Y": "📋 Last 5 Years",
-            "ITD": "📆 Inception to Date",
-            "CUSTOM": "⚙️ Custom Range"
+            "3Y": "Last 3 Years (Recommended)",
+            "1Y": "Last 1 Year", 
+            "5Y": "Last 5 Years",
+            "ITD": "Inception to Date",
+            "CUSTOM": "Custom Range"
         }
         
         period_descriptions = {
@@ -228,30 +232,22 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             "CUSTOM": "Specify exact date range for targeted analysis"
         }
         
-        # Get current date range to determine default
-        try:
-            current_start, current_end = data_access_service.get_date_range()
-            # Try to match current range to a preset
-            default_period = "3Y"  # Default recommendation
-            if current_start and current_end:
-                days_diff = (current_end - current_start).days
-                if 300 <= days_diff <= 400:  # ~1 year
-                    default_period = "1Y"
-                elif 1000 <= days_diff <= 1200:  # ~3 years  
-                    default_period = "3Y"
-                elif 1700 <= days_diff <= 2000:  # ~5 years
-                    default_period = "5Y"
-                elif days_diff > 5000:  # Very long period
-                    default_period = "ITD"
-                else:
-                    default_period = "CUSTOM"
-        except:
-            default_period = "3Y"
+        # Initialize session state for period preset if not exists
+        if 'period_preset_key' not in st.session_state:
+            st.session_state.period_preset_key = "3Y"  # Default recommendation
+        
+        # Use session state as single source of truth
+        default_period = st.session_state.period_preset_key
         
         try:
             default_period_index = list(period_options.keys()).index(default_period)
         except ValueError:
             default_period_index = 0  # Default to 3Y
+            st.session_state.period_preset_key = "3Y"
+        
+        def on_period_change():
+            """Callback to update session state when period changes."""
+            st.session_state.period_preset_key = st.session_state.period_selector
         
         selected_period = st.selectbox(
             "Select analysis time period",
@@ -259,7 +255,8 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             index=default_period_index,
             format_func=lambda x: period_options[x],
             key="period_selector",
-            help="Choose the time period for analysis. 3 years is recommended for balanced results."
+            help="Choose the time period for analysis. 3 years is recommended for balanced results.",
+            on_change=on_period_change
         )
         
         # Show period description
@@ -267,7 +264,6 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         
         # Calculate dates or show custom inputs
         if selected_period == "CUSTOM":
-            st.info("💡 Custom date range selected")
             
             # Get current values as defaults
             try:
@@ -298,83 +294,27 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             # Validate custom range
             if date_range_start and date_range_end:
                 if date_range_start >= date_range_end:
-                    st.error("❌ Start date must be before end date")
+                    st.error("Start date must be before end date")
                 elif (date_range_end - date_range_start).days < 30:
-                    st.warning("⚠️ Very short time period may not provide reliable results")
+                    st.warning("Very short time period may not provide reliable results")
                 else:
                     days_span = (date_range_end - date_range_start).days
-                    st.success(f"✅ Custom range: {days_span} days ({days_span/365:.1f} years)")
+                    st.success(f"Custom range: {days_span} days ({days_span/365:.1f} years)")
         else:
             # Use preset dates
             date_range_start, date_range_end = get_date_range(selected_period)
             
             # Display the calculated range
             days_span = (date_range_end - date_range_start).days
-            st.success(f"📊 Period: {date_range_start.strftime('%Y-%m-%d')} to {date_range_end.strftime('%Y-%m-%d')} ({days_span/365:.1f} years)")
+            st.success(f"Period: {date_range_start.strftime('%Y-%m-%d')} to {date_range_end.strftime('%Y-%m-%d')} ({days_span/365:.1f} years)")
         
         # Show data adequacy warning for high frequencies with short periods
         if selected_frequency in ["Q", "A"] and selected_period in ["1Y"]:
             if selected_frequency == "Q":
-                st.warning("⚠️ Quarterly frequency with 1-year period provides only ~4 data points")
+                st.warning("Quarterly frequency with 1-year period provides only ~4 data points")
             else:
-                st.warning("⚠️ Annual frequency with 1-year period provides only 1 data point")
+                st.warning("Annual frequency with 1-year period provides only 1 data point")
         
-        # Data Processing Status
-        st.divider()
-        st.subheader("🔧 Data Processing Status")
-        
-        # Apply settings to data service if they changed
-        settings_changed = False
-        
-        try:
-            # Check if frequency changed
-            if data_access_service.get_current_frequency() != selected_frequency:
-                settings_changed = True
-            
-            # Check if date range changed  
-            current_start, current_end = data_access_service.get_date_range()
-            if current_start != date_range_start or current_end != date_range_end:
-                settings_changed = True
-                
-        except Exception as e:
-            logger.warning(f"Error checking current settings: {e}")
-            settings_changed = True
-        
-        if settings_changed:
-            with st.spinner('🔄 Updating data settings...'):
-                try:
-                    # Apply new settings
-                    freq_changed = data_access_service.set_frequency(selected_frequency)
-                    date_changed = data_access_service.set_date_range(date_range_start, date_range_end)
-                    
-                    if freq_changed:
-                        st.success(f"✅ Frequency updated to {frequency_labels[selected_frequency]}")
-                    if date_changed:
-                        st.success(f"✅ Date range updated")
-                        
-                    # Show resampling info
-                    if selected_frequency != "B":
-                        st.info("ℹ️ Data will be resampled using compound return calculations")
-                    
-                except Exception as e:
-                    st.error(f"❌ Error updating settings: {str(e)}")
-                    logger.error(f"Error applying sidebar settings: {e}")
-        else:
-            st.success("✅ Settings current - no changes needed")
-        
-        # Show frequency info
-        try:
-            freq_info = data_access_service.get_frequency_status()
-            native_freq = freq_info.get('native_frequency', 'B')
-            is_resampled = freq_info.get('is_resampled', False)
-            
-            if is_resampled:
-                st.info(f"📊 Resampling: {native_freq} → {selected_frequency}")
-            else:
-                st.success(f"📈 Native frequency: {selected_frequency}")
-                
-        except Exception as e:
-            logger.warning(f"Could not get frequency status: {e}")
     
     return SidebarState(
         lens=lens,

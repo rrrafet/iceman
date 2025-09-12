@@ -157,9 +157,9 @@ if __name__ == "__main__":
     print("Serialization Test Results:")
     print(f"Success: {result['success']}")
     if result['success']:
-        print("✅ All data types handled correctly")
+        print("All data types handled correctly")
         print("\nSerialized data structure:")
         for key, value in result['serialized_data'].items():
             print(f"  {key}: {type(value).__name__} = {value}")
     else:
-        print(f"❌ Error: {result['message']}")
+        print(f"Error: {result['message']}")

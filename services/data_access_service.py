@@ -209,11 +209,34 @@ class DataAccessService:
         try:
             logger.info(f"DataAccessService: Switching to risk model: {model_code}")
             
+            # Get current model to check if change is needed
+            current_model = self.get_current_risk_model()
+            if current_model == model_code:
+                logger.info(f"Risk model {model_code} is already active, no switch needed")
+                return True  # Already at target model - this is success, not failure
+            
             # Call the underlying service method
             success = self.risk_analysis_service.switch_risk_model(model_code)
             
             if success:
                 logger.info(f"Successfully switched to risk model: {model_code}")
+                logger.info(f"RISK MODEL SWITCH DEBUG - Previous: {current_model}, New: {model_code}")
+                
+                # Enhanced cache clearing for tab data refresh
+                self._clear_all_caches()
+                
+                # Clear Streamlit caches if they exist
+                try:
+                    import streamlit as st
+                    if hasattr(st, 'cache_data') and hasattr(st.cache_data, 'clear'):
+                        st.cache_data.clear()
+                        logger.info("Cleared Streamlit cache_data")
+                    if hasattr(st, 'cache_resource') and hasattr(st.cache_resource, 'clear'):
+                        st.cache_resource.clear()
+                        logger.info("Cleared Streamlit cache_resource")
+                except ImportError:
+                    pass  # Streamlit not available
+                
                 return True
             else:
                 logger.error(f"Failed to switch to risk model: {model_code}")
@@ -222,6 +245,39 @@ class DataAccessService:
         except Exception as e:
             logger.error(f"Error switching risk model to {model_code}: {e}")
             return False
+    
+    def _clear_all_caches(self):
+        """Clear all internal caches to ensure fresh data after risk model switch."""
+        try:
+            logger.info("Clearing all internal caches for risk model switch")
+            
+            # Clear portfolio graph cache
+            if hasattr(self.risk_analysis_service, '_portfolio_graph'):
+                self.risk_analysis_service._portfolio_graph = None
+                logger.info("Cleared portfolio graph cache")
+            
+            # Clear risk computation caches
+            if hasattr(self.risk_analysis_service, 'risk_computation') and self.risk_analysis_service.risk_computation:
+                if hasattr(self.risk_analysis_service.risk_computation, 'clear_cache'):
+                    self.risk_analysis_service.risk_computation.clear_cache()
+                    logger.info("Cleared risk computation cache")
+                    
+                # Clear any additional caches in risk computation
+                if hasattr(self.risk_analysis_service.risk_computation, 'clear_all_caches'):
+                    self.risk_analysis_service.risk_computation.clear_all_caches()
+                    logger.info("Cleared all risk computation caches")
+            
+            # Clear data provider caches if they have any
+            if hasattr(self.factor_provider, 'clear_cache'):
+                self.factor_provider.clear_cache()
+                logger.info("Cleared factor provider cache")
+                
+            if hasattr(self.portfolio_provider, 'clear_cache'):
+                self.portfolio_provider.clear_cache()
+                logger.info("Cleared portfolio provider cache")
+                
+        except Exception as e:
+            logger.warning(f"Error clearing caches: {e}")
     
     def get_current_risk_model(self) -> str:
         """Get the currently active risk model."""

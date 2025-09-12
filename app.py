@@ -96,6 +96,11 @@ def run():
     risk_analysis_service = st.session_state.risk_analysis_service
     data_access_service = st.session_state.data_access_service
     
+    # Ensure data access service has the current risk analysis service reference
+    data_access_service.risk_analysis_service = risk_analysis_service
+    data_access_service.factor_provider = risk_analysis_service.factor_provider
+    data_access_service.portfolio_provider = risk_analysis_service.portfolio_provider
+    
     # Render sidebar and get filter states
     sidebar_state = render_sidebar(config_service, data_access_service)
     
@@ -132,7 +137,6 @@ def run():
                     config_service.update_setting("portfolio_graphs.default", sidebar_state.selected_portfolio_graph)
                     
                     st.success(f"Portfolio graph changed to {sidebar_state.selected_portfolio_graph}")
-                    st.info("🔄 Portfolio and risk calculations re-initialized with new graph structure.")
                     # Force a rerun to refresh all data with new portfolio
                     st.rerun()
                 else:
@@ -140,55 +144,32 @@ def run():
             except Exception as e:
                 st.error(f"Failed to change portfolio graph: {e}")
     
-    # Handle risk model changes
+    # Simple risk model handling - just apply if different
     current_model = data_access_service.get_current_risk_model()
     if sidebar_state.selected_risk_model != current_model:
-        with st.spinner(f"Loading risk model: {sidebar_state.selected_risk_model}..."):
-            try:
-                success = data_access_service.switch_risk_model(sidebar_state.selected_risk_model)
-                if success:
-                    st.success(f"Risk model changed to {sidebar_state.selected_risk_model}")
-                    st.info("🔄 Risk calculations re-initialized with new factor model.")
-                    # Force a rerun to refresh all data with new model
-                    st.rerun()
-                else:
-                    st.error(f"Failed to switch to risk model: {sidebar_state.selected_risk_model}")
-            except Exception as e:
-                st.error(f"Failed to change risk model: {e}")
+        try:
+            success = data_access_service.switch_risk_model(sidebar_state.selected_risk_model)
+            if success:
+                st.rerun()
+        except Exception as e:
+            st.error(f"Failed to change risk model: {e}")
     
-    # Handle frequency changes
+    # Simple frequency handling - just apply if different
     current_freq = data_access_service.get_current_frequency()
     if sidebar_state.frequency != current_freq:
-        with st.spinner(f"Switching to {sidebar_state.frequency} frequency..."):
-            try:
-                success = data_access_service.set_frequency(sidebar_state.frequency)
-                if success:
-                    st.success(f"Data frequency changed to {sidebar_state.frequency}")
-                    st.info("🔄 System re-initialized with new frequency. All charts and tables now show resampled data.")
-                    # Force a rerun to refresh all data with new frequency
-                    st.rerun()
-                else:
-                    st.warning("Frequency was already set to the selected value")
-            except Exception as e:
-                st.error(f"Failed to change frequency: {e}")
+        try:
+            data_access_service.set_frequency(sidebar_state.frequency)
+        except Exception as e:
+            st.error(f"Failed to change frequency: {e}")
     
-    # Handle date range changes
+    # Simple date range handling - just apply if different  
     current_start, current_end = data_access_service.get_date_range()
-    if sidebar_state.date_range_start != current_start or sidebar_state.date_range_end != current_end:
-        with st.spinner(f"Applying date range filter..."):
-            try:
-                success = data_access_service.set_date_range(sidebar_state.date_range_start, sidebar_state.date_range_end)
-                if success:
-                    start_str = sidebar_state.date_range_start.strftime('%Y-%m-%d') if sidebar_state.date_range_start else 'None'
-                    end_str = sidebar_state.date_range_end.strftime('%Y-%m-%d') if sidebar_state.date_range_end else 'None'
-                    st.success(f"Date range applied: {start_str} to {end_str}")
-                    st.info("🔄 System re-initialized with new date range. All data filtered to selected period.")
-                    # Force a rerun to refresh all data with new date range
-                    st.rerun()
-                else:
-                    st.warning("Date range was already set to the selected values")
-            except Exception as e:
-                st.error(f"Failed to change date range: {e}")
+    if (sidebar_state.date_range_start != current_start or 
+        sidebar_state.date_range_end != current_end):
+        try:
+            data_access_service.set_date_range(sidebar_state.date_range_start, sidebar_state.date_range_end)
+        except Exception as e:
+            st.error(f"Failed to change date range: {e}")
     
     # Debug: Show current state (can be removed later)
     if st.sidebar.checkbox("Show Debug Info", value=False):
@@ -274,7 +255,7 @@ def run():
         freq_label = frequency_labels.get(sidebar_state.frequency, sidebar_state.frequency)
         st.markdown(f"**Freq:** {freq_label}")
         if sidebar_state.frequency not in ["D", "B"]:
-            st.caption("📈 Resampled")
+            st.caption("Resampled")
     
     with col5:
         # Show current date range
@@ -282,10 +263,10 @@ def run():
             start_str = sidebar_state.date_range_start.strftime('%m/%d/%y')
             end_str = sidebar_state.date_range_end.strftime('%m/%d/%y')
             st.markdown(f"**Date Range:** {sidebar_state.date_range_preset}")
-            st.caption(f"📅 {start_str} - {end_str}")
+            st.caption(f"{start_str} - {end_str}")
         else:
             st.markdown("**Date Range:** All Data")
-            st.caption("📅 No filter")
+            st.caption("No filter")
     
     # Tab navigation with state persistence
     tab_names = [

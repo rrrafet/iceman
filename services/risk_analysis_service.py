@@ -129,15 +129,25 @@ class RiskAnalysisService:
                 
                 self.risk_model_registry.register_model(model_code, metadata)
             
-            # Set current model from config
+            # Preserve user's risk model selection during reinitialization
+            current_selection = self._current_risk_model  # Preserve existing selection
             default_model = self.config_service.get_default_risk_model()
-            if default_model in available_models:
-                self.risk_model_registry.set_current_model(default_model)
-                self._current_risk_model = default_model
+            
+            if current_selection and current_selection in available_models:
+                # Keep user's selection if valid
+                target_model = current_selection
+                logger.info(f"Preserving user's risk model selection: {target_model}")
+            elif default_model in available_models:
+                # Fall back to default if no valid selection exists
+                target_model = default_model
+                logger.info(f"Using default risk model: {target_model}")
             else:
-                # Use first available model
-                self._current_risk_model = available_models[0]
-                self.risk_model_registry.set_current_model(self._current_risk_model)
+                # Use first available model as last resort
+                target_model = available_models[0]
+                logger.info(f"Using first available risk model: {target_model}")
+            
+            self.risk_model_registry.set_current_model(target_model)
+            self._current_risk_model = target_model
             
             logger.info(f"Initialized {len(available_models)} risk models, "
                        f"current: {self._current_risk_model}")
@@ -267,8 +277,8 @@ class RiskAnalysisService:
             
             # Recompute with new model
             success = self.refresh_analysis(force=True)
-            
             if success:
+                
                 logger.info(f"Successfully switched to risk model: {model_code}")
                 return True
             else:
@@ -278,7 +288,7 @@ class RiskAnalysisService:
         except Exception as e:
             logger.error(f"Risk model switch failed: {e}")
             return False
-    
+
     def refresh_analysis(self, force: bool = False) -> bool:
         """
         Refresh risk analysis if needed or forced.
@@ -308,6 +318,18 @@ class RiskAnalysisService:
             if factor_returns.empty:
                 logger.error("No factor returns data for refresh")
                 return False
+            
+            # Debug logging for risk model switch verification
+            logger.info(f"RISK MODEL DEBUG - Current model: {self._current_risk_model}")
+            logger.info(f"RISK MODEL DEBUG - Factor data shape: {factor_returns.shape}")
+            if not factor_returns.empty:
+                factor_names = list(factor_returns.columns)
+                logger.info(f"RISK MODEL DEBUG - Factors ({len(factor_names)}): {factor_names[:10]}...")  # Show first 10
+                # Show a small sample of the factor data for verification
+                if len(factor_returns) > 0:
+                    sample_date = factor_returns.index[0]
+                    sample_values = factor_returns.iloc[0, :5].to_dict()  # First 5 factors
+                    logger.info(f"RISK MODEL DEBUG - Sample data for {sample_date}: {sample_values}")
             
             # Run computation
             success = self.risk_computation.run_full_decomposition(factor_returns)

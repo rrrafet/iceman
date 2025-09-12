@@ -41,7 +41,6 @@ def render_allocation_selection_tab(data_access_service, sidebar_state):
     
     if not risk_data or "error" in risk_data:
         st.warning(f"Risk decomposition data not available for {component_id} ({lens} lens)")
-        st.info("This could mean risk analysis has not been run for this component/lens combination.")
         return
     
     # Build descendant leaf asset list
@@ -49,7 +48,6 @@ def render_allocation_selection_tab(data_access_service, sidebar_state):
     
     if not leaf_ids:
         st.warning(f"No descendant leaf assets found for component {component_id}")
-        st.info("This tab shows asset-level analysis for leaf nodes. Try selecting a component that has asset descendants.")
         return
     
     # Render header with component info and badges
@@ -164,15 +162,12 @@ def render_header_badges(component_id: str, risk_data: Dict[str, Any], num_asset
     
     with col1:
         analysis_type = risk_data.get('analysis_type', 'portfolio')
-        st.info(f"Analysis: {analysis_type.title()}")
     
     with col2:
         frequency = risk_data.get('frequency', 'Unknown')
-        st.info(f"Frequency: {frequency}")
     
     with col3:
         annualized = risk_data.get('annualized', False)
-        st.info(f"Annualized: {'Yes' if annualized else 'No'}")
 
 
 def render_brinson_analysis_table(df: pd.DataFrame, risk_data: Dict[str, Any], column_mapping: Dict[str, str]):
@@ -193,9 +188,9 @@ def render_brinson_analysis_table(df: pd.DataFrame, risk_data: Dict[str, Any], c
     # Show analysis type context
     analysis_type = risk_data.get('analysis_type', 'portfolio')
     # if analysis_type == "active":
-    #     st.info("🎯 **Active Risk Analysis**: Allocation and Selection columns show Brinson-style risk decomposition")
+    #     st.info("**Active Risk Analysis**: Allocation and Selection columns show Brinson-style risk decomposition")
     # else:
-    #     st.info("📊 **Portfolio Risk Analysis**: Allocation and Selection columns are zero (portfolio-only lens)")
+    #     st.info("**Portfolio Risk Analysis**: Allocation and Selection columns are zero (portfolio-only lens)")
     
     # Configure column formatting for display
     formatted_df = format_table_for_display(df, column_mapping)

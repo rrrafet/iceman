@@ -89,7 +89,6 @@ def render_descendant_returns_chart(data_access_service, component_id: str):
         descendant_data = data_access_service.get_descendant_returns_data(component_id, lens_descendants)
         
         if descendant_data.empty:
-            st.info(f"No descendant returns data available for {component_id} ({lens_descendants} lens)")
             return
         
         # Apply compounding if requested
@@ -151,7 +150,6 @@ def render_factor_returns_chart(data_access_service):
         factor_data = data_access_service.get_factor_returns_data()
         
         if factor_data.empty:
-            st.info("No factor returns data available")
             return
         
         # Factor selection for display (limit to avoid overcrowding)
@@ -168,7 +166,6 @@ def render_factor_returns_chart(data_access_service):
         )
         
         if not selected_factors:
-            st.info("Please select at least one factor to display")
             return
         
         # Filter to selected factors
@@ -232,11 +229,9 @@ def render_scatter_plot_analysis(data_access_service, sidebar_state):
         available_factors = data_access_service.get_factor_list()
         
         if not descendant_ids:
-            st.info(f"No descendant components found for {component_id}")
             return
             
         if not available_factors:
-            st.info("No factors available for analysis")
             return
         
         # User selections
@@ -280,7 +275,6 @@ def render_scatter_plot_analysis(data_access_service, sidebar_state):
             )
         
         if not selected_nodes or not selected_factor:
-            st.info("Please select nodes and a factor for analysis")
             return
         
         # Get data for scatter plot

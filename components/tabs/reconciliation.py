@@ -52,7 +52,7 @@ def render_reconciliation_tab(data_access_service, sidebar_state):
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.info("**Validation Process**: Compares computed volatilities from risk engine against empirical volatilities calculated from the exact same filtered/resampled return data that feeds into risk calculations")
+        pass  # Validation process info removed
     
     with col2:
         tolerance_basis_points = st.number_input(

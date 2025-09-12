@@ -39,15 +39,16 @@ def render_risk_decomposition_tab(data_access_service, sidebar_state):
 
     st.header("Risk Decomposition")
     
-    # Get current risk model
+    # Get current risk model directly from data service
     current_model = data_access_service.get_current_risk_model()
     st.markdown(f"**Component:** {sidebar_state.selected_component_id} | **Lens:** {lens.title()} | **Risk Model:** {current_model}")
     
-    # Data availability diagnostics
-    # render_data_availability_diagnostics(data_access_service, sidebar_state)
-    
     # Extract risk decomposition data for current selection
-    risk_data = data_access_service.get_risk_decomposition(sidebar_state.selected_component_id, sidebar_state.lens)
+    try:
+        risk_data = data_access_service.get_risk_decomposition(sidebar_state.selected_component_id, sidebar_state.lens)
+    except Exception as e:
+        st.error(f"Error loading risk decomposition data for risk model {current_model}: {e}")
+        return
 
     # Debug: Show available risk data fields for development
     # if st.checkbox("Show debug info (available risk data fields)"):
@@ -190,7 +191,6 @@ def render_factor_analysis_charts(risk_data: Dict[str, Any]):
     factor_exposures = risk_data.get('factor_exposures', {})
     
     if not factor_contributions and not factor_exposures:
-        st.info("Factor analysis data not available for this component/lens combination.")
         return
     
     # Create two-column layout
@@ -202,7 +202,7 @@ def render_factor_analysis_charts(risk_data: Dict[str, Any]):
             contributions_chart = create_factor_contributions_chart(factor_contributions)
             st.plotly_chart(contributions_chart, width='stretch')
         else:
-            st.info("Factor contributions data not available")
+            pass  # Factor contributions info removed
     
     with col2:
         # st.markdown("**Factor Exposures**")
@@ -210,7 +210,7 @@ def render_factor_analysis_charts(risk_data: Dict[str, Any]):
             exposures_chart = create_factor_exposures_chart(factor_exposures)
             st.plotly_chart(exposures_chart, width='stretch')
         else:
-            st.info("Factor exposures data not available")
+            pass  # Factor exposures info removed
 
 
 def create_factor_contributions_chart(factor_contributions: Dict[str, float]) -> go.Figure:
@@ -349,7 +349,6 @@ def render_risk_matrices(risk_data: Dict[str, Any]):
     asset_by_factor_contributions = risk_data.get('asset_by_factor_contributions', {})
     
     if not weighted_betas and not asset_by_factor_contributions:
-        st.info("Matrix data not available for this component/lens combination. This may require risk model recomputation.")
         return
     
     # Create two-column layout
@@ -361,7 +360,7 @@ def render_risk_matrices(risk_data: Dict[str, Any]):
             contributions_heatmap = create_asset_factor_contributions_heatmap(asset_by_factor_contributions, risk_data)
             st.plotly_chart(contributions_heatmap, width='stretch')
         else:
-            st.info("Asset-factor contributions matrix not available")
+            pass  # Asset-factor contributions matrix info removed
     
     with col2:
         # st.markdown("**Weighted Beta Matrix**")
@@ -369,7 +368,7 @@ def render_risk_matrices(risk_data: Dict[str, Any]):
             weighted_betas_heatmap = create_weighted_betas_heatmap(weighted_betas, risk_data)
             st.plotly_chart(weighted_betas_heatmap, width='stretch')
         else:
-            st.info("Weighted betas matrix not available")
+            pass  # Weighted betas matrix info removed
 
 
 def create_asset_factor_contributions_heatmap(asset_by_factor_dict: Dict[str, Dict[str, float]], risk_data: Dict[str, Any]) -> go.Figure:

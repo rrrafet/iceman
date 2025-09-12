@@ -9,6 +9,9 @@ def render_overview_tab(data_access_service, sidebar_state):
     
     st.header(f"**Component:** {sidebar_state.selected_component_id}")
     
+    # Get current risk model directly from data service
+    current_risk_model = data_access_service.get_current_risk_model()
+    
     # Risk composition - stacked bars for Portfolio, Benchmark, Active
     render_risk_composition(data_access_service, sidebar_state)
 
@@ -47,7 +50,7 @@ def render_compound_returns_chart(data_access_service, sidebar_state):
         return
     
     if combined.empty:
-        st.info("No time series data available for compound returns chart")
+        st.warning("No time series data available for compound returns chart")
         return
     
     # Plot the compound returns with proper colors
@@ -77,12 +80,14 @@ def render_risk_composition(data_access_service, sidebar_state):
     # Get risk data for all lenses
     component_id = sidebar_state.selected_component_id
     
+    # Get current risk model directly from data service
+    current_risk_model = data_access_service.get_current_risk_model()
     try:
         portfolio_risk = data_access_service.get_risk_decomposition(component_id, "portfolio")
         benchmark_risk = data_access_service.get_risk_decomposition(component_id, "benchmark")
         active_risk = data_access_service.get_risk_decomposition(component_id, "active")
     except Exception as e:
-        st.error(f"Error loading risk data: {e}")
+        st.error(f"Error loading risk data for risk model {current_risk_model}: {e}")
         return
     
     col1, col2, col3 = st.columns(3)
