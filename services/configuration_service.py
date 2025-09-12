@@ -159,6 +159,24 @@ class ConfigurationService:
         """
         return self._config.get("risk_model", {}).get("available", ["macro1"])
     
+    def get_default_portfolio_graph(self) -> str:
+        """
+        Get default portfolio graph name.
+        
+        Returns:
+            Default portfolio graph name
+        """
+        return self._config.get("portfolio_graphs", {}).get("default", "strategic_portfolio")
+    
+    def get_available_portfolio_graphs(self) -> List[str]:
+        """
+        Get list of available portfolio graphs from configuration.
+        
+        Returns:
+            List of available portfolio graph names
+        """
+        return self._config.get("portfolio_graphs", {}).get("available", ["strategic_portfolio"])
+    
     def get_portfolio_name(self) -> str:
         """
         Get portfolio name for display.
@@ -202,16 +220,24 @@ class ConfigurationService:
         Returns:
             Default portfolio name
         """
-        return self._config.get("portfolio", {}).get("default", "strategic_portfolio")
+        return self.get_default_portfolio_graph()
     
-    def get_root_component_id(self) -> str:
+    def get_root_component_id(self, portfolio_graph=None) -> str:
         """
         Get root component ID for portfolio hierarchy.
         
+        Args:
+            portfolio_graph: Optional portfolio graph object to read root_id from
+            
         Returns:
             Root component ID
         """
-        return self._config.get("portfolio", {}).get("root_component_id", "TOTAL")
+        # If portfolio graph is provided, use its root_id
+        if portfolio_graph and hasattr(portfolio_graph, 'root_id') and portfolio_graph.root_id:
+            return portfolio_graph.root_id
+        
+        # Fallback to default value
+        return "TOTAL"
     
     def get_analysis_settings(self) -> Dict[str, Any]:
         """
@@ -409,7 +435,7 @@ class ConfigurationService:
             "default_risk_model": self.get_default_risk_model(),
             "available_risk_models": self.get_available_risk_models(),
             "default_portfolio": self.get_default_portfolio(),
-            "root_component_id": self.get_root_component_id(),
+            "root_component_id": "Portfolio-specific (see individual graph configs)",
             "analysis_settings": self.get_analysis_settings(),
             "ui_settings": self.get_ui_settings(),
             "data_sources": self.get_data_sources()
@@ -504,11 +530,34 @@ class ConfigurationService:
         Returns:
             Resolved Path object for the data source
         """
+        # Special handling for portfolio_config - dynamically resolve from portfolio graphs
+        if source_name == 'portfolio_config':
+            default_portfolio = self.get_default_portfolio_graph()
+            return self.get_portfolio_graph_path(default_portfolio)
+        
         data_sources = self.get_data_sources()
         path_str = data_sources.get(source_name)
         
         if not path_str:
             raise ValueError(f"Data source '{source_name}' not found in configuration")
+        
+        return self.resolve_path(path_str)
+    
+    def get_portfolio_graph_path(self, graph_name: str) -> Path:
+        """
+        Get resolved path for a portfolio graph configuration.
+        
+        Args:
+            graph_name: Name of the portfolio graph (e.g., 'strategic_portfolio')
+            
+        Returns:
+            Resolved Path object for the portfolio graph configuration
+        """
+        portfolio_configs = self._config.get("portfolio_graph_configs", {})
+        path_str = portfolio_configs.get(graph_name)
+        
+        if not path_str:
+            raise ValueError(f"Portfolio graph '{graph_name}' not found in configuration")
         
         return self.resolve_path(path_str)
     

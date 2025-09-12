@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 import logging
 from pathlib import Path
+from spark.core.resampling_service import create_resampling_service, ResamplingService
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,13 @@ class FactorDataProvider:
         self.frequency_manager = None
         self.current_frequency = "B"  # Default to business daily
         
+        # Initialize resampling service
+        self.resampling_service = create_resampling_service(native_frequency="B")
+        
+        # Date range filtering
+        self.date_range_start: Optional[datetime] = None
+        self.date_range_end: Optional[datetime] = None
+        
         self._load_data()
     
     def set_frequency_manager(self, frequency_manager):
@@ -46,11 +54,35 @@ class FactorDataProvider:
         self.frequency_manager = frequency_manager
         if frequency_manager:
             self.current_frequency = frequency_manager.current_frequency
+            # Update resampling service with new frequency
+            self.resampling_service.set_target_frequency(self.current_frequency)
             logger.info(f"FactorDataProvider frequency set to: {self.current_frequency}")
+    
+    def set_date_range(self, start_date: Optional[datetime], end_date: Optional[datetime]):
+        """
+        Set date range filter and reload data with filtering applied at source.
+        
+        Args:
+            start_date: Start date for filtering (inclusive)
+            end_date: End date for filtering (inclusive)
+        """
+        # Check if date range actually changed
+        date_range_changed = (
+            self.date_range_start != start_date or 
+            self.date_range_end != end_date
+        )
+        
+        if date_range_changed:
+            self.date_range_start = start_date
+            self.date_range_end = end_date
+            logger.info(f"FactorDataProvider date range set to: [{start_date}, {end_date}]")
+            
+            # Reload data with filtering applied at source
+            self._load_data()
     
     def _resample_returns_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Resample returns DataFrame using compound return calculation.
+        Resample returns DataFrame using centralized resampling service.
         
         Args:
             df: Returns DataFrame to resample
@@ -58,16 +90,11 @@ class FactorDataProvider:
         Returns:
             Resampled DataFrame or original DataFrame if no resampling needed
         """
-        if not self.frequency_manager or not self.frequency_manager.is_resampled or df.empty:
+        if df.empty:
             return df
         
-        freq = self.frequency_manager.current_frequency
         try:
-            # Apply compound return calculation to each column
-            resampled = df.resample(freq).apply(lambda x: (1 + x).prod() - 1)
-            logger.debug(f"FactorDataProvider resampled DataFrame from {len(df)} to {len(resampled)} observations at {freq}")
-            return resampled.dropna()
-            
+            return self.resampling_service.resample_dataframe(df)
         except Exception as e:
             logger.error(f"Error resampling DataFrame in FactorDataProvider: {e}")
             return df
@@ -90,6 +117,9 @@ class FactorDataProvider:
             if not pd.api.types.is_datetime64_any_dtype(self._data['date']):
                 self._data['date'] = pd.to_datetime(self._data['date'])
             
+            # Apply date range filtering at source if set
+            self._apply_date_range_filter()
+            
             # Sort by date and factor for consistency
             self._data = self._data.sort_values(['date', 'factor_name', 'riskmodel_code'])
             
@@ -100,6 +130,29 @@ class FactorDataProvider:
         except Exception as e:
             logger.error(f"Failed to load factor data from {self.factor_returns_path}: {e}")
             raise
+    
+    def _apply_date_range_filter(self):
+        """Apply date range filter to loaded data if date range is set."""
+        if self._data is None or self._data.empty:
+            return
+            
+        original_count = len(self._data)
+        
+        # Apply date filtering if date range is set
+        if self.date_range_start is not None or self.date_range_end is not None:
+            if self.date_range_start is not None:
+                self._data = self._data[self._data['date'] >= pd.Timestamp(self.date_range_start)]
+                
+            if self.date_range_end is not None:
+                self._data = self._data[self._data['date'] <= pd.Timestamp(self.date_range_end)]
+            
+            filtered_count = len(self._data)
+            logger.info(f"Applied date range filter to factor data: {original_count} -> {filtered_count} records")
+            
+            if filtered_count == 0:
+                logger.warning("Date range filter resulted in no factor data. Check date range settings.")
+        else:
+            logger.debug("No date range filter applied to factor data - using all available data")
     
     def load_factor_returns(self, risk_model_code: str) -> pd.DataFrame:
         """

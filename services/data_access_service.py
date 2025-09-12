@@ -11,6 +11,7 @@ import logging
 
 from spark.ui.apps.maverick.services.risk_analysis_service import RiskAnalysisService
 from spark.risk.annualizer import RiskAnnualizer
+from spark.core.resampling_service import create_resampling_service, ResamplingService
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,14 @@ class DataAccessService:
         # Initialize frequency manager
         self.frequency_manager = FrequencyManager()
         
-        logger.info("Initialized DataAccessService with frequency manager")
+        # Initialize central resampling service
+        self.resampling_service = create_resampling_service(native_frequency="B")
+        
+        # Initialize date range filtering
+        self.date_range_start: Optional[datetime] = None
+        self.date_range_end: Optional[datetime] = None
+        
+        logger.info("Initialized DataAccessService with frequency manager and date range filtering")
     
     # Frequency management methods
     def set_frequency(self, frequency: str) -> bool:
@@ -134,6 +142,60 @@ class DataAccessService:
         """Check if current frequency is native (no resampling)."""
         return self.frequency_manager.is_native_frequency()
     
+    # Date range management methods
+    def set_date_range(self, start_date: Optional[datetime], end_date: Optional[datetime]) -> bool:
+        """
+        Set date range for data filtering and trigger re-initialization if needed.
+        
+        Args:
+            start_date: Start date for filtering (inclusive)
+            end_date: End date for filtering (inclusive)
+            
+        Returns:
+            True if date range changed and system was re-initialized, False otherwise
+        """
+        try:
+            # Check if date range changed
+            date_range_changed = (
+                self.date_range_start != start_date or 
+                self.date_range_end != end_date
+            )
+            
+            if date_range_changed:
+                old_start = self.date_range_start
+                old_end = self.date_range_end
+                
+                self.date_range_start = start_date
+                self.date_range_end = end_date
+                
+                logger.info(f"Date range changed from [{old_start}, {old_end}] to [{start_date}, {end_date}], updating data providers")
+                
+                # Update data providers with new date range - this triggers data reload
+                if hasattr(self, 'portfolio_provider') and self.portfolio_provider:
+                    self.portfolio_provider.set_date_range(self.date_range_start, self.date_range_end)
+                    logger.info("Updated PortfolioDataProvider with new date range")
+                
+                if hasattr(self, 'factor_provider') and self.factor_provider:
+                    self.factor_provider.set_date_range(self.date_range_start, self.date_range_end)
+                    logger.info("Updated FactorDataProvider with new date range")
+                
+                # Trigger system re-initialization to rebuild risk calculations
+                self._trigger_system_reinitialization()
+                return True
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error setting date range: {e}")
+            raise
+    
+    def get_date_range(self) -> tuple[Optional[datetime], Optional[datetime]]:
+        """Get current date range filter."""
+        return self.date_range_start, self.date_range_end
+    
+    def clear_date_range(self) -> bool:
+        """Clear date range filter and trigger re-initialization."""
+        return self.set_date_range(None, None)
+    
     def switch_risk_model(self, model_code: str) -> bool:
         """
         Switch to a different risk model and reinitialize the system.
@@ -170,6 +232,9 @@ class DataAccessService:
         try:
             logger.info("Starting system re-initialization for frequency change")
             
+            # Update central resampling service with new frequency
+            self.resampling_service.set_target_frequency(self.frequency_manager.current_frequency)
+            
             # Clear portfolio graph and risk computation caches
             if hasattr(self.risk_analysis_service, '_portfolio_graph'):
                 self.risk_analysis_service._portfolio_graph = None
@@ -180,15 +245,16 @@ class DataAccessService:
                     self.risk_analysis_service.risk_computation.clear_cache()
                     logger.info("Cleared risk computation cache")
             
-            # CRITICAL: Update data providers with current frequency before re-initialization
-            logger.info("Updating data providers with current frequency")
+            # Update data providers with current frequency manager before re-initialization
+            # Note: Date range filtering is handled when set_date_range() is called explicitly
+            logger.info("Updating data providers with current frequency manager")
             if hasattr(self, 'portfolio_provider') and self.portfolio_provider:
                 self.portfolio_provider.set_frequency_manager(self.frequency_manager)
-                logger.info("Updated PortfolioDataProvider frequency")
+                logger.info("Updated PortfolioDataProvider frequency manager")
             
             if hasattr(self, 'factor_provider') and self.factor_provider:
                 self.factor_provider.set_frequency_manager(self.frequency_manager)
-                logger.info("Updated FactorDataProvider frequency")
+                logger.info("Updated FactorDataProvider frequency manager")
             
             # Re-initialize the entire system
             logger.info("Re-initializing risk analysis service")
@@ -204,10 +270,13 @@ class DataAccessService:
             logger.error(f"Error during system re-initialization: {e}")
             raise RuntimeError(f"Failed to re-initialize system: {e}")
     
-    # Resampling helper methods
+    # Note: Date filtering is now handled at the data provider level during data loading
+    # This ensures a single source of truth for all filtered data
+
+    # Resampling helper methods (using central resampling service)
     def _resample_returns_series(self, series: pd.Series) -> pd.Series:
         """
-        Resample returns series using compound return calculation.
+        Resample returns series using central resampling service.
         
         Args:
             series: Returns series to resample
@@ -215,24 +284,18 @@ class DataAccessService:
         Returns:
             Resampled series or original series if no resampling needed
         """
-        if not self.frequency_manager.is_resampled or series.empty:
+        if series.empty:
             return series
         
-        freq = self.frequency_manager.current_frequency
         try:
-            # Use compound return calculation: (1+r).prod() - 1
-            resampled = series.resample(freq).apply(lambda x: (1 + x).prod() - 1)
-            resampled.name = series.name
-            logger.debug(f"Resampled series {series.name} from {len(series)} to {len(resampled)} observations at {freq} frequency")
-            return resampled.dropna()
-            
+            return self.resampling_service.resample_series(series)
         except Exception as e:
-            logger.error(f"Error resampling series {series.name} to {freq}: {e}")
+            logger.error(f"Error resampling series {series.name}: {e}")
             return series
     
     def _resample_returns_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Resample returns DataFrame using compound return calculation.
+        Resample returns DataFrame using central resampling service.
         
         Args:
             df: Returns DataFrame to resample
@@ -240,18 +303,13 @@ class DataAccessService:
         Returns:
             Resampled DataFrame or original DataFrame if no resampling needed
         """
-        if not self.frequency_manager.is_resampled or df.empty:
+        if df.empty:
             return df
         
-        freq = self.frequency_manager.current_frequency
         try:
-            # Apply compound return calculation to each column
-            resampled = df.resample(freq).apply(lambda x: (1 + x).prod() - 1)
-            logger.debug(f"Resampled DataFrame from {len(df)} to {len(resampled)} observations at {freq} frequency")
-            return resampled.dropna()
-            
+            return self.resampling_service.resample_dataframe(df)
         except Exception as e:
-            logger.error(f"Error resampling DataFrame to {freq}: {e}")
+            logger.error(f"Error resampling DataFrame: {e}")
             return df
     
     # Time series access methods
@@ -267,6 +325,7 @@ class DataAccessService:
         """
         try:
             returns = self.portfolio_provider.get_component_returns(component_id, 'portfolio')
+            # Date filtering already applied at data provider level
             return self._resample_returns_series(returns)
         except Exception as e:
             logger.error(f"Error getting portfolio returns for {component_id}: {e}")
@@ -284,6 +343,7 @@ class DataAccessService:
         """
         try:
             returns = self.portfolio_provider.get_component_returns(component_id, 'benchmark')
+            # Date filtering already applied at data provider level
             return self._resample_returns_series(returns)
         except Exception as e:
             logger.error(f"Error getting benchmark returns for {component_id}: {e}")
@@ -380,6 +440,7 @@ class DataAccessService:
         try:
             if return_type in ['portfolio', 'benchmark']:
                 matrix = self.portfolio_provider.get_returns_matrix(return_type)
+                # Date filtering already applied at data provider level
                 return self._resample_returns_dataframe(matrix)
             elif return_type == 'active':
                 # Compute active returns matrix
@@ -389,7 +450,7 @@ class DataAccessService:
                 if portfolio_matrix.empty or benchmark_matrix.empty:
                     return pd.DataFrame()
                 
-                # Apply resampling to both matrices before computing active returns
+                # Date filtering already applied at data provider level, just resample
                 portfolio_resampled = self._resample_returns_dataframe(portfolio_matrix)
                 benchmark_resampled = self._resample_returns_dataframe(benchmark_matrix)
                 
@@ -1365,7 +1426,7 @@ class DataAccessService:
             if factor_returns.empty:
                 return pd.DataFrame()
             
-            # Apply resampling to factor returns
+            # Date filtering already applied at data provider level, just resample
             factor_returns_resampled = self._resample_returns_dataframe(factor_returns)
             
             if factor_names:
@@ -1432,22 +1493,24 @@ class DataAccessService:
             Dictionary with portfolio, benchmark, and active weights relative to root
         """
         try:
+            # Get path from component to root
+            portfolio_graph = self.risk_analysis_service.get_portfolio_graph()
+            
             # Get the root component ID
-            root_id = self.risk_analysis_service.config_service.get_root_component_id()
+            root_id = self.risk_analysis_service.config_service.get_root_component_id(portfolio_graph)
             
             # If this is the root, return 100% weights
             if component_id == root_id:
                 return {"portfolio": 1.0, "benchmark": 1.0, "active": 0.0}
-            
-            # Get path from component to root
-            portfolio_graph = self.risk_analysis_service.get_portfolio_graph()
             if not portfolio_graph:
                 logger.warning(f"Portfolio graph not available for weight calculation")
                 return {"portfolio": 0.0, "benchmark": 0.0, "active": 0.0}
             
-            # Use PortfolioGraph's existing relative_to='root' functionality
-            portfolio_weights = portfolio_graph.portfolio_weights(component_id, relative_to='root')
-            benchmark_weights = portfolio_graph.benchmark_weights(component_id, relative_to='root')
+            # Use PortfolioGraph's existing relative_to='root' functionality with correct contexts
+            # Portfolio weights: use operational context (overlays = 1.0, like computed system) with normalization
+            portfolio_weights = portfolio_graph.portfolio_weights(component_id, weight_type='operational', relative_to='root', normalize=True)
+            # Benchmark weights: use allocation context (overlays = 0.0) with normalization
+            benchmark_weights = portfolio_graph.benchmark_weights(component_id, weight_type='allocation', relative_to='root', normalize=True)
             
             # Get the specific weight for this component
             portfolio_weight = portfolio_weights.get(component_id, 0.0)
@@ -1551,10 +1614,15 @@ class DataAccessService:
             - Weights (portfolio, benchmark, active) relative to root
             - Computed statistics (mean, std) for each lens
             - Raw time series statistics (mean, std) for each lens
+            - Overlay metadata and weight source information
         """
         try:
             # Get weights relative to root
             weights = self.get_weights_relative_to_root(component_id)
+            
+            # Get component metadata including overlay status
+            metadata = self.portfolio_provider.get_component_metadata(component_id)
+            is_overlay = metadata.get("is_overlay", False)
             
             # Get computed statistics for each lens
             computed_stats = {
@@ -1574,12 +1642,18 @@ class DataAccessService:
             children = self.portfolio_provider.get_component_children(component_id)
             is_leaf = len(children) == 0
             
+            # Determine weight source information
+            weight_source = self._get_weight_source_info(component_id, is_overlay)
+            
             return {
                 "component_id": component_id,
                 "is_leaf": is_leaf,
+                "is_overlay": is_overlay,
                 "weights": weights,
+                "weight_source": weight_source,
                 "computed_stats": computed_stats,
-                "raw_stats": raw_stats
+                "raw_stats": raw_stats,
+                "metadata": metadata
             }
             
         except Exception as e:
@@ -1587,7 +1661,9 @@ class DataAccessService:
             return {
                 "component_id": component_id,
                 "is_leaf": True,
+                "is_overlay": False,
                 "weights": {"portfolio": 0.0, "benchmark": 0.0, "active": 0.0},
+                "weight_source": {"portfolio": "Root Relative", "benchmark": "Root Relative", "active": "Root Relative"},
                 "computed_stats": {
                     "portfolio": {"mean": np.nan, "std": np.nan, "source": "computed"},
                     "benchmark": {"mean": np.nan, "std": np.nan, "source": "computed"},
@@ -1597,7 +1673,49 @@ class DataAccessService:
                     "portfolio": {"mean": np.nan, "std": np.nan, "source": "raw"},
                     "benchmark": {"mean": np.nan, "std": np.nan, "source": "raw"},
                     "active": {"mean": np.nan, "std": np.nan, "source": "raw"}
+                },
+                "metadata": {"is_overlay": False, "component_type": "leaf", "name": component_id, "path": component_id}
+            }
+    
+    def _get_weight_source_info(self, component_id: str, is_overlay: bool) -> Dict[str, str]:
+        """
+        Get weight source information for a component based on overlay implementation changes.
+        
+        Args:
+            component_id: Component identifier
+            is_overlay: Whether component is an overlay strategy
+            
+        Returns:
+            Dictionary with weight source information for each lens
+        """
+        try:
+            if is_overlay:
+                # Based on overlay operational weight implementation:
+                # - Portfolio operational weights are fixed at 1.0
+                # - Benchmark operational weights are 0.0 (overlays excluded from benchmark)
+                # - Active operational weights = Portfolio - Benchmark = 1.0 - 0.0 = 1.0
+                return {
+                    "portfolio": "Operational Context (1.0)",
+                    "benchmark": "Allocation Context (0.0)", 
+                    "active": "Operational - Allocation (1.0)",
+                    "description": "Overlay strategy: Portfolio uses operational weights (1.0), benchmark uses allocation weights (0.0) with overlay-aware normalization"
                 }
+            else:
+                # Regular components use weights relative to root
+                return {
+                    "portfolio": "Root Relative",
+                    "benchmark": "Root Relative",
+                    "active": "Root Relative", 
+                    "description": "Regular component: Weights calculated relative to portfolio root"
+                }
+                
+        except Exception as e:
+            logger.error(f"Error getting weight source info for {component_id}: {e}")
+            return {
+                "portfolio": "Unknown",
+                "benchmark": "Unknown",
+                "active": "Unknown",
+                "description": "Error determining weight source"
             }
     
     def get_hierarchical_stats(self, root_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1613,7 +1731,8 @@ class DataAccessService:
         try:
             # Get root ID if not provided
             if root_id is None:
-                root_id = self.risk_analysis_service.config_service.get_root_component_id()
+                portfolio_graph = self.risk_analysis_service.get_portfolio_graph()
+                root_id = self.risk_analysis_service.config_service.get_root_component_id(portfolio_graph)
             
             # Build hierarchical list
             stats_list = []

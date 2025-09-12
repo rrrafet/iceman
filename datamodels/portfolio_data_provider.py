@@ -11,6 +11,7 @@ import numpy as np
 import logging
 from pathlib import Path
 import yaml
+from spark.core.resampling_service import create_resampling_service, ResamplingService
 
 if TYPE_CHECKING:
     from spark.portfolio.graph import PortfolioGraph
@@ -44,6 +45,13 @@ class PortfolioDataProvider:
         self.frequency_manager = None
         self.current_frequency = "B"  # Default to business daily
         
+        # Initialize resampling service
+        self.resampling_service = create_resampling_service(native_frequency="B")
+        
+        # Date range filtering
+        self.date_range_start: Optional[datetime] = None
+        self.date_range_end: Optional[datetime] = None
+        
         self._load_config_and_build_graph()
     
     def set_frequency_manager(self, frequency_manager):
@@ -56,11 +64,35 @@ class PortfolioDataProvider:
         self.frequency_manager = frequency_manager
         if frequency_manager:
             self.current_frequency = frequency_manager.current_frequency
+            # Update resampling service with new frequency
+            self.resampling_service.set_target_frequency(self.current_frequency)
             logger.info(f"PortfolioDataProvider frequency set to: {self.current_frequency}")
+    
+    def set_date_range(self, start_date: Optional[datetime], end_date: Optional[datetime]):
+        """
+        Set date range filter and reload data with filtering applied at source.
+        
+        Args:
+            start_date: Start date for filtering (inclusive)
+            end_date: End date for filtering (inclusive)
+        """
+        # Check if date range actually changed
+        date_range_changed = (
+            self.date_range_start != start_date or 
+            self.date_range_end != end_date
+        )
+        
+        if date_range_changed:
+            self.date_range_start = start_date
+            self.date_range_end = end_date
+            logger.info(f"PortfolioDataProvider date range set to: [{start_date}, {end_date}]")
+            
+            # Reload and rebuild with filtered data from source
+            self._load_config_and_build_graph()
     
     def _resample_returns_series(self, series: pd.Series) -> pd.Series:
         """
-        Resample returns series using compound return calculation.
+        Resample returns series using centralized resampling service.
         
         Args:
             series: Returns series to resample
@@ -68,24 +100,18 @@ class PortfolioDataProvider:
         Returns:
             Resampled series or original series if no resampling needed
         """
-        if not self.frequency_manager or not self.frequency_manager.is_resampled or series.empty:
+        if series.empty:
             return series
         
-        freq = self.frequency_manager.current_frequency
         try:
-            # Use compound return calculation: (1+r).prod() - 1
-            resampled = series.resample(freq).apply(lambda x: (1 + x).prod() - 1)
-            resampled.name = series.name
-            logger.debug(f"PortfolioDataProvider resampled {series.name} from {len(series)} to {len(resampled)} observations at {freq}")
-            return resampled.dropna()
-            
+            return self.resampling_service.resample_series(series)
         except Exception as e:
             logger.error(f"Error resampling series {series.name} in PortfolioDataProvider: {e}")
             return series
     
     def _resample_returns_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Resample returns DataFrame using compound return calculation.
+        Resample returns DataFrame using centralized resampling service.
         
         Args:
             df: Returns DataFrame to resample
@@ -93,16 +119,11 @@ class PortfolioDataProvider:
         Returns:
             Resampled DataFrame or original DataFrame if no resampling needed
         """
-        if not self.frequency_manager or not self.frequency_manager.is_resampled or df.empty:
+        if df.empty:
             return df
         
-        freq = self.frequency_manager.current_frequency
         try:
-            # Apply compound return calculation to each column
-            resampled = df.resample(freq).apply(lambda x: (1 + x).prod() - 1)
-            logger.debug(f"PortfolioDataProvider resampled DataFrame from {len(df)} to {len(resampled)} observations at {freq}")
-            return resampled.dropna()
-            
+            return self.resampling_service.resample_dataframe(df)
         except Exception as e:
             logger.error(f"Error resampling DataFrame in PortfolioDataProvider: {e}")
             return df
@@ -122,6 +143,10 @@ class PortfolioDataProvider:
             
             # Build PortfolioGraph using Spark framework
             self._build_portfolio_graph()
+            
+            # Print tree structure after graph is built
+            if self._portfolio_graph:
+                self._portfolio_graph.print_tree()
             
             logger.info(f"Loaded portfolio configuration: {self._portfolio_config.get('name', 'Unknown')}")
             logger.info(f"Built PortfolioGraph with {len(self._portfolio_graph.components) if self._portfolio_graph else 0} components")
@@ -156,11 +181,37 @@ class PortfolioDataProvider:
         if not pd.api.types.is_datetime64_any_dtype(self._data['date']):
             self._data['date'] = pd.to_datetime(self._data['date'])
         
+        # Apply date range filtering at source if set
+        self._apply_date_range_filter()
+        
         # Sort by date and component for consistency
         self._data = self._data.sort_values(['date', 'component_id'])
         
         logger.info(f"Loaded time series data: {len(self._data)} records, "
                    f"{self._data['component_id'].nunique()} components")
+    
+    def _apply_date_range_filter(self):
+        """Apply date range filter to loaded data if date range is set."""
+        if self._data is None or self._data.empty:
+            return
+            
+        original_count = len(self._data)
+        
+        # Apply date filtering if date range is set
+        if self.date_range_start is not None or self.date_range_end is not None:
+            if self.date_range_start is not None:
+                self._data = self._data[self._data['date'] >= pd.Timestamp(self.date_range_start)]
+                
+            if self.date_range_end is not None:
+                self._data = self._data[self._data['date'] <= pd.Timestamp(self.date_range_end)]
+            
+            filtered_count = len(self._data)
+            logger.info(f"Applied date range filter: {original_count} -> {filtered_count} records")
+            
+            if filtered_count == 0:
+                logger.warning("Date range filter resulted in no data. Check date range settings.")
+        else:
+            logger.debug("No date range filter applied - using all available data")
     
     def _validate_component_mapping(self) -> Dict[str, Any]:
         """
@@ -451,13 +502,53 @@ class PortfolioDataProvider:
             raise ValueError(f"Invalid return_type: {return_type}. Must be 'portfolio', 'benchmark', or 'active'")
         
         try:
-            # Use PortfolioGraph methods for return calculation
+            # Use PortfolioGraph methods for return calculation with correct context for overlays
             if return_type == 'portfolio':
-                metric = self._portfolio_graph.portfolio_returns(component_id)
+                # Portfolio returns: use operational context with NO normalization (like computed system)
+                from spark.portfolio.visitors import AggregationVisitor
+                from spark.portfolio.metrics import WeightedAverage
+                
+                # Create WeightedAverage with normalization disabled to match computed system
+                aggregator = WeightedAverage(normalize_weights=False)
+                visitor = AggregationVisitor('portfolio_return', aggregator, self._portfolio_graph.metric_store, 'portfolio_weight', 'operational')
+                
+                # Use the same traversal method as built-in portfolio_returns
+                root_component = self._portfolio_graph.components[component_id]
+                metric = visitor.run_on(root_component)
             elif return_type == 'benchmark':
-                metric = self._portfolio_graph.benchmark_returns(component_id)
+                # Benchmark returns: use allocation context where overlays have weight 0.0
+                metric = self._portfolio_graph.benchmark_returns(component_id, context='allocation')
             elif return_type == 'active':
-                metric = self._portfolio_graph.excess_returns(component_id)
+                # Active returns: manually calculate using correct contexts to match computed system
+                # Portfolio: operational context (overlays = 1.0)
+                portfolio_metric = self._portfolio_graph.portfolio_returns(component_id, context='operational')
+                # Benchmark: allocation context (overlays = 0.0) 
+                benchmark_metric = self._portfolio_graph.benchmark_returns(component_id, context='allocation')
+                
+                if portfolio_metric is None or benchmark_metric is None:
+                    logger.warning(f"Could not calculate active returns for {component_id}: missing portfolio or benchmark data")
+                    return pd.Series(dtype=float, name=f"{component_id}_active")
+                
+                # Calculate active returns manually
+                portfolio_value = portfolio_metric.value()
+                benchmark_value = benchmark_metric.value()
+                
+                if isinstance(portfolio_value, pd.Series) and isinstance(benchmark_value, pd.Series):
+                    # Align series and compute active returns
+                    aligned_portfolio, aligned_benchmark = portfolio_value.align(benchmark_value)
+                    active_value = aligned_portfolio - aligned_benchmark
+                    
+                    # Create metric-like object to match the rest of the code
+                    from spark.portfolio.metrics import TimeSeriesMetric
+                    metric = TimeSeriesMetric(active_value)
+                elif isinstance(portfolio_value, (int, float)) and isinstance(benchmark_value, (int, float)):
+                    # Scalar values
+                    active_value = portfolio_value - benchmark_value
+                    from spark.portfolio.metrics import ScalarMetric
+                    metric = ScalarMetric(active_value)
+                else:
+                    logger.warning(f"Incompatible metric types for active returns calculation: {type(portfolio_value)} vs {type(benchmark_value)}")
+                    return pd.Series(dtype=float, name=f"{component_id}_active")
             
             if metric is None:
                 logger.warning(f"No {return_type} returns found for component: {component_id}")
@@ -619,12 +710,6 @@ class PortfolioDataProvider:
             raise ValueError(f"Invalid return_type: {return_type}. Must be 'portfolio', 'benchmark', or 'active'")
         
         try:
-            # Use collect_metrics to gather returns from all leaf components
-            if return_type == 'active':
-                metric_name = 'excess_return'  # Use appropriate metric name for active returns
-            else:
-                metric_name = f'{return_type}_return'
-            
             # Get root component ID (assuming single root or first available)
             root_id = self._portfolio_graph.root_id
             if root_id is None:
@@ -633,8 +718,16 @@ class PortfolioDataProvider:
                                  if not comp.parent_ids]
                 root_id = root_candidates[0] if root_candidates else list(self._portfolio_graph.components.keys())[0]
             
-            # Collect metrics from all leaf components
-            metrics_dict = self._portfolio_graph.collect_metrics(root_id, metric_name, include_nodes=False)
+            # Get all component IDs (both leaves and nodes)
+            all_component_ids = list(self._portfolio_graph.components.keys())
+            
+            # Use context-aware return calculation for each component
+            metrics_dict = {}
+            for comp_id in all_component_ids:
+                # Get returns using the context-aware method
+                returns_series = self.get_component_returns(comp_id, return_type)
+                if not returns_series.empty:
+                    metrics_dict[comp_id] = returns_series
             
             if not metrics_dict:
                 logger.warning(f"No {return_type} returns found in portfolio graph")
@@ -768,6 +861,58 @@ class PortfolioDataProvider:
                 return parent
         
         return None
+    
+    def get_component_metadata(self, component_id: str) -> Dict[str, Any]:
+        """
+        Get component metadata including overlay status and other configuration.
+        
+        Args:
+            component_id: Component identifier
+            
+        Returns:
+            Dictionary with component metadata including:
+            - is_overlay: Whether component is an overlay strategy
+            - component_type: 'leaf' or 'node' 
+            - name: Display name
+        """
+        try:
+            # Get component from portfolio graph
+            if self._portfolio_graph and component_id in self._portfolio_graph.components:
+                component = self._portfolio_graph.components[component_id]
+                return {
+                    "is_overlay": getattr(component, 'is_overlay', False),
+                    "component_type": "leaf" if len(self.get_component_children(component_id)) == 0 else "node",
+                    "name": component_id,
+                    "path": component_id
+                }
+            
+            # Fallback: check configuration data
+            if self._portfolio_config and 'components' in self._portfolio_config:
+                for comp in self._portfolio_config['components']:
+                    if comp.get('path') == component_id:
+                        return {
+                            "is_overlay": comp.get('is_overlay', False),
+                            "component_type": comp.get('component_type', 'leaf'),
+                            "name": comp.get('name', component_id),
+                            "path": comp['path']
+                        }
+            
+            # Default metadata if not found
+            return {
+                "is_overlay": False,
+                "component_type": "leaf" if len(self.get_component_children(component_id)) == 0 else "node",
+                "name": component_id,
+                "path": component_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting metadata for {component_id}: {e}")
+            return {
+                "is_overlay": False,
+                "component_type": "leaf",
+                "name": component_id,
+                "path": component_id
+            }
     
     def validate_data_consistency(self) -> Dict[str, any]:
         """

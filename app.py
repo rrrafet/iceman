@@ -11,7 +11,7 @@ from spark.ui.apps.maverick.components.tabs.overview import render_overview_tab
 from spark.ui.apps.maverick.components.tabs.risk_decomposition import render_risk_decomposition_tab
 from spark.ui.apps.maverick.components.tabs.allocation_selection import render_allocation_selection_tab
 from spark.ui.apps.maverick.components.tabs.data_explorer import render_data_explorer_tab
-from spark.ui.apps.maverick.components.tabs.stats import render_stats_tab
+from spark.ui.apps.maverick.components.tabs.reconciliation import render_reconciliation_tab
 from spark.ui.apps.maverick.datamodels import FactorDataProvider, PortfolioDataProvider
 
 def initialize_services():
@@ -99,6 +99,47 @@ def run():
     # Render sidebar and get filter states
     sidebar_state = render_sidebar(config_service, data_access_service)
     
+    # Handle portfolio graph changes
+    current_portfolio_graph = config_service.get_default_portfolio_graph()
+    if sidebar_state.selected_portfolio_graph != current_portfolio_graph:
+        with st.spinner(f"Loading portfolio graph: {sidebar_state.selected_portfolio_graph}..."):
+            try:
+                # Get the new portfolio config path
+                new_portfolio_config_path = config_service.get_portfolio_graph_path(sidebar_state.selected_portfolio_graph)
+                
+                # Reinitialize services with new portfolio
+                factor_data_path = config_service.get_data_source_path('factor_returns')
+                factor_provider = FactorDataProvider(str(factor_data_path))
+                portfolio_provider = PortfolioDataProvider(str(new_portfolio_config_path))
+                
+                # Create new risk analysis service
+                new_risk_analysis_service = RiskAnalysisService(
+                    config_service=config_service,
+                    factor_provider=factor_provider,
+                    portfolio_provider=portfolio_provider
+                )
+                
+                # Initialize the new risk analysis service
+                if new_risk_analysis_service.initialize():
+                    # Create new data access service
+                    new_data_access_service = DataAccessService(new_risk_analysis_service)
+                    
+                    # Update session state
+                    st.session_state.risk_analysis_service = new_risk_analysis_service
+                    st.session_state.data_access_service = new_data_access_service
+                    
+                    # Update config service to reflect new default
+                    config_service.update_setting("portfolio_graphs.default", sidebar_state.selected_portfolio_graph)
+                    
+                    st.success(f"Portfolio graph changed to {sidebar_state.selected_portfolio_graph}")
+                    st.info("🔄 Portfolio and risk calculations re-initialized with new graph structure.")
+                    # Force a rerun to refresh all data with new portfolio
+                    st.rerun()
+                else:
+                    st.error(f"Failed to initialize risk analysis with portfolio: {sidebar_state.selected_portfolio_graph}")
+            except Exception as e:
+                st.error(f"Failed to change portfolio graph: {e}")
+    
     # Handle risk model changes
     current_model = data_access_service.get_current_risk_model()
     if sidebar_state.selected_risk_model != current_model:
@@ -131,11 +172,74 @@ def run():
             except Exception as e:
                 st.error(f"Failed to change frequency: {e}")
     
+    # Handle date range changes
+    current_start, current_end = data_access_service.get_date_range()
+    if sidebar_state.date_range_start != current_start or sidebar_state.date_range_end != current_end:
+        with st.spinner(f"Applying date range filter..."):
+            try:
+                success = data_access_service.set_date_range(sidebar_state.date_range_start, sidebar_state.date_range_end)
+                if success:
+                    start_str = sidebar_state.date_range_start.strftime('%Y-%m-%d') if sidebar_state.date_range_start else 'None'
+                    end_str = sidebar_state.date_range_end.strftime('%Y-%m-%d') if sidebar_state.date_range_end else 'None'
+                    st.success(f"Date range applied: {start_str} to {end_str}")
+                    st.info("🔄 System re-initialized with new date range. All data filtered to selected period.")
+                    # Force a rerun to refresh all data with new date range
+                    st.rerun()
+                else:
+                    st.warning("Date range was already set to the selected values")
+            except Exception as e:
+                st.error(f"Failed to change date range: {e}")
+    
+    # Debug: Show current state (can be removed later)
+    if st.sidebar.checkbox("Show Debug Info", value=False):
+        st.sidebar.write("**Debug Info:**")
+        st.sidebar.write(f"Sidebar date range: {sidebar_state.date_range_start} to {sidebar_state.date_range_end}")
+        st.sidebar.write(f"Data service date range: {current_start} to {current_end}")
+        st.sidebar.write(f"Preset: {sidebar_state.date_range_preset}")
+        
+        # Show data provider info to verify single source of truth
+        try:
+            # Portfolio data info
+            portfolio_provider = data_access_service.portfolio_provider
+            if portfolio_provider and hasattr(portfolio_provider, '_data') and portfolio_provider._data is not None:
+                st.sidebar.write(f"**Portfolio Data Source:**")
+                st.sidebar.write(f"Total records: {len(portfolio_provider._data)}")
+                if not portfolio_provider._data.empty:
+                    min_date = portfolio_provider._data['date'].min().strftime('%Y-%m-%d')
+                    max_date = portfolio_provider._data['date'].max().strftime('%Y-%m-%d')
+                    st.sidebar.write(f"Date range: {min_date} to {max_date}")
+                    components = portfolio_provider._data['component_id'].nunique()
+                    st.sidebar.write(f"Components: {components}")
+            
+            # Factor data info  
+            factor_provider = data_access_service.factor_provider
+            if factor_provider and hasattr(factor_provider, '_data') and factor_provider._data is not None:
+                st.sidebar.write(f"**Factor Data Source:**")
+                st.sidebar.write(f"Total records: {len(factor_provider._data)}")
+                if not factor_provider._data.empty:
+                    min_date = factor_provider._data['date'].min().strftime('%Y-%m-%d')
+                    max_date = factor_provider._data['date'].max().strftime('%Y-%m-%d')
+                    st.sidebar.write(f"Date range: {min_date} to {max_date}")
+                    factors = factor_provider._data['factor_name'].nunique()
+                    st.sidebar.write(f"Factors: {factors}")
+                    
+            # Verification: Get sample returns to confirm filtering is applied
+            sample_component = data_access_service.get_all_component_ids()[0] if data_access_service.get_all_component_ids() else None
+            if sample_component:
+                sample_returns = data_access_service.get_portfolio_returns(sample_component)
+                st.sidebar.write(f"**Processed Returns:**")
+                st.sidebar.write(f"Return series length: {len(sample_returns)}")
+                if not sample_returns.empty:
+                    st.sidebar.write(f"Series range: {sample_returns.index.min().strftime('%Y-%m-%d')} to {sample_returns.index.max().strftime('%Y-%m-%d')}")
+                    
+        except Exception as e:
+            st.sidebar.write(f"Debug error: {e}")
+    
     # Main header
     st.title("Maverick")
     
     # Enhanced header with portfolio and risk analysis status
-    col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+    col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 1.5])
     
     with col1:
         # Portfolio info
@@ -143,7 +247,8 @@ def run():
         st.markdown(f"**Graph:** {portfolio_name}")
         
         # Show current component path
-        selected_component = sidebar_state.selected_component_id if hasattr(sidebar_state, 'selected_component_id') else config_service.get_root_component_id()
+        portfolio_graph = data_access_service.risk_analysis_service.get_portfolio_graph()
+        selected_component = sidebar_state.selected_component_id if hasattr(sidebar_state, 'selected_component_id') else config_service.get_root_component_id(portfolio_graph)
         #st.caption(f"Component: {selected_component}")
     
     with col2:
@@ -171,47 +276,65 @@ def run():
         if sidebar_state.frequency not in ["D", "B"]:
             st.caption("📈 Resampled")
     
-    # Tab navigation
+    with col5:
+        # Show current date range
+        if sidebar_state.date_range_start and sidebar_state.date_range_end:
+            start_str = sidebar_state.date_range_start.strftime('%m/%d/%y')
+            end_str = sidebar_state.date_range_end.strftime('%m/%d/%y')
+            st.markdown(f"**Date Range:** {sidebar_state.date_range_preset}")
+            st.caption(f"📅 {start_str} - {end_str}")
+        else:
+            st.markdown("**Date Range:** All Data")
+            st.caption("📅 No filter")
+    
+    # Tab navigation with state persistence
     tab_names = [
         "Overview",
         "Risk Decomposition",
-        "Allocation-Selection",
+        "Allocation-Selection", 
         "Data Explorer",
-        "Stats",
-        # "Active Lens", 
-        # "Hierarchy Explorer",
-        # "Timeline",
-        # "Factor Lens",
-        # "Assets",
-        # "Weights & Tilts",
-        # "Decomposition",
-        # "Stats & Distributions", 
-        # "Correlations",
-        # "Validation & Diagnostics",
-        # "Data Management & Integration"
+        "Reconciliation",
     ]
     
-    tabs = st.tabs(tab_names)
+    # Initialize active tab in session state if not exists
+    if 'active_tab' not in st.session_state:
+        st.session_state.active_tab = "Overview"
     
-    # Tab 1 - Overview
-    with tabs[0]:
+    # Initialize the radio widget state to match session state
+    if 'tab_radio' not in st.session_state:
+        st.session_state.tab_radio = st.session_state.active_tab
+    
+    # Define callback function to update active tab
+    def on_tab_change():
+        st.session_state.active_tab = st.session_state.tab_radio
+    
+    # Create tab selector with callback
+    selected_tab = st.radio(
+        "Navigation",
+        options=tab_names,
+        key="tab_radio",
+        horizontal=True,
+        label_visibility="collapsed",
+        on_change=on_tab_change
+    )
+    
+    # Use the selected tab value
+    current_tab = selected_tab
+    
+    # Add some visual separation
+    st.divider()
+    
+    # Render the selected tab content
+    if current_tab == "Overview":
         render_overview_tab(data_access_service, sidebar_state)
-    
-    # Tab 2 - Risk Decomposition
-    with tabs[1]:
+    elif current_tab == "Risk Decomposition":
         render_risk_decomposition_tab(data_access_service, sidebar_state)
-    
-    # Tab 3 - Allocation-Selection
-    with tabs[2]:
+    elif current_tab == "Allocation-Selection":
         render_allocation_selection_tab(data_access_service, sidebar_state)
-    
-    # Tab 4 - Data Explorer
-    with tabs[3]:
+    elif current_tab == "Data Explorer":
         render_data_explorer_tab(data_access_service, sidebar_state)
-    
-    # Tab 5 - Stats
-    with tabs[4]:
-        render_stats_tab(data_access_service, sidebar_state)
+    elif current_tab == "Reconciliation":
+        render_reconciliation_tab(data_access_service, sidebar_state)
 
 
 def main():
