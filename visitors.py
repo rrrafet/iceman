@@ -399,6 +399,21 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
                                f"benchmark={benchmark_result.total_risk:.4f}, "
                                f"active={active_result.total_risk:.4f}")
                 
+                freq = leaf_models["portfolio"].frequency
+
+                freq_multiplier = {
+                    'D': 252,
+                    'W': 52,
+                    'M': 12,
+                    'Q': 4,
+                    'A': 1
+                }.get(freq, 252)  # Default to daily if unknown
+
+                self.logger.info(f"Raw volatility for {leaf.component_id}: "
+                                 f"portfolio={np.sqrt(freq_multiplier) * portfolio_returns.std():.4f}, "
+                                 f"benchmark={np.sqrt(freq_multiplier) * benchmark_returns.std():.4f}, "
+                                 f"active={np.sqrt(freq_multiplier) * active_returns.std():.4f}")
+
                 # Store RiskResult objects in metric store with correct naming convention
                 if self.metric_store:
                     self.metric_store.set_metric(
