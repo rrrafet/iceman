@@ -145,8 +145,8 @@ class PortfolioDataProvider:
             self._build_portfolio_graph()
             
             # Print tree structure after graph is built
-            #if self._portfolio_graph:
-                #self._portfolio_graph.print_tree()
+            if self._portfolio_graph:
+                self._portfolio_graph.print_tree()
             
             logger.info(f"Loaded portfolio configuration: {self._portfolio_config.get('name', 'Unknown')}")
             logger.info(f"Built PortfolioGraph with {len(self._portfolio_graph.components) if self._portfolio_graph else 0} components")

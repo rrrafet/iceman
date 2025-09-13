@@ -28,7 +28,7 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
     
     with st.sidebar:
         st.header("Maverick Controls")
-        
+
         # Current configuration display
         st.subheader("Configuration")
         portfolio_name = config_service.get_portfolio_name()
@@ -62,10 +62,10 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
         # Risk Model selector
         st.subheader("Risk Model")
         available_models = config_service.get_available_risk_models()
-        print(f"Available risk models: {available_models}")
+
         # Get current risk model
         current_risk_model = data_access_service.get_current_risk_model()
-        print(f"Current risk model from data service: {current_risk_model}")
+
         if not current_risk_model:
             current_risk_model = config_service.get_default_risk_model()
         
@@ -82,7 +82,6 @@ def render_sidebar(config_service, data_access_service) -> SidebarState:
             key="risk_model_selector",
             help="Select a factor risk model to analyze portfolio risk"
         )
-        print(f"Selected risk model: {selected_risk_model}")
         st.divider()
         
         # Component selector
