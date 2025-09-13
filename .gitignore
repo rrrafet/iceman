@@ -1,0 +1,26 @@
+# Ignore Python bytecode files
+__pycache__/
+*.py[cod]
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore environment variables
+.env
+
+# Ignore logs
+logs/
+*.log
+
+# Ignore data files
+
+*.parque
+
+*.__pycache__
+*.py[cod]
+.ipynb_checkpoints/
+.env
+logs/
+*.log
+
+*.venv*

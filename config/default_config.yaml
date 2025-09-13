@@ -12,7 +12,10 @@ risk_model:
   default: "macro0"
   available:
     - "macro0"
-    - "Dollar"
+    - "macro1"
+    - "macro2"
+    - "equity1"
+    - "equity2"
     - "Market"
 
 portfolio: {}
@@ -37,7 +40,7 @@ ui_defaults:
 
 # Data sources - paths will be resolved relative to base_dir
 data_sources:
-  factor_returns: "data/factor_returns_many.parquet"
+  factor_returns: "data/factor_returns_all.parquet"
 
 # Portfolio graph configurations - paths will be resolved relative to base_dir
 portfolio_graph_configs:
