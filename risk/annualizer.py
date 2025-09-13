@@ -9,8 +9,8 @@ annualized form when needed for reporting.
 
 import numpy as np
 from typing import Dict, Any
-from spark.core.mappers import frequency_to_multiplier
-from spark.ui.apps.maverick.datamodels import factor_data_provider
+from core.mappers import frequency_to_multiplier
+from datamodels import factor_data_provider
 
 
 class RiskAnnualizer:

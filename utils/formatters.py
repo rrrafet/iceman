@@ -3,7 +3,7 @@ Utility functions for data formatting and display
 """
 from typing import Union, List, Dict, Any
 
-from spark.risk.annualizer import RiskAnnualizer
+from risk.annualizer import RiskAnnualizer
 
 def format_percentage(value: float, decimal_places: int = 2) -> str:
     """Format value as percentage with specified decimal places"""

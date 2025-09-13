@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import pandas as pd
 
-from spark.risk.annualizer import RiskAnnualizer
+from risk.annualizer import RiskAnnualizer
 
 
 @dataclass

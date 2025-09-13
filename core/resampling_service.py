@@ -17,8 +17,8 @@ import numpy as np
 import logging
 from typing import Union, Optional, Dict, Any, List
 from datetime import datetime
-from spark.core.mappers import frequency_to_multiplier
-from spark.risk.annualizer import RiskAnnualizer
+from core.mappers import frequency_to_multiplier
+from risk.annualizer import RiskAnnualizer
 
 logger = logging.getLogger(__name__)
 

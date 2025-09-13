@@ -5,7 +5,7 @@ This file defines risk models with explicit start_date, end_date, and frequency
 specifications for better temporal control and validation.
 """
 
-from spark.risk.model_definitions import (
+from risk.model_definitions import (
     RiskModelDefinition, 
     ModelMetadata, 
     FactorSpecification,

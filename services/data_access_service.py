@@ -9,9 +9,9 @@ import numpy as np
 from datetime import datetime
 import logging
 
-from spark.ui.apps.maverick.services.risk_analysis_service import RiskAnalysisService
-from spark.risk.annualizer import RiskAnnualizer
-from spark.core.resampling_service import create_resampling_service, ResamplingService
+from services.risk_analysis_service import RiskAnalysisService
+from risk.annualizer import RiskAnnualizer
+from core.resampling_service import create_resampling_service, ResamplingService
 
 logger = logging.getLogger(__name__)
 

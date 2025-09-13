@@ -11,10 +11,10 @@ import numpy as np
 import logging
 from pathlib import Path
 import yaml
-from spark.core.resampling_service import create_resampling_service, ResamplingService
+from core.resampling_service import create_resampling_service, ResamplingService
 
 if TYPE_CHECKING:
-    from spark.portfolio.graph import PortfolioGraph
+    from portfolio.graph import PortfolioGraph
 
 logger = logging.getLogger(__name__)
 
@@ -303,10 +303,10 @@ class PortfolioDataProvider:
                 return
             
             # Import Spark framework classes
-            from spark.portfolio.graph import PortfolioGraph
-            from spark.portfolio.builders import PortfolioBuilder
-            from spark.portfolio.builder_multiplicative import PortfolioBuilderMultiplicative
-            from spark.portfolio.builder_sum import PortfolioBuilderSum
+            from portfolio.graph import PortfolioGraph
+            from portfolio.builders import PortfolioBuilder
+            from portfolio.builder_multiplicative import PortfolioBuilderMultiplicative
+            from portfolio.builder_sum import PortfolioBuilderSum
             
             # Get builder settings from YAML
             builder_settings = self._portfolio_config.get('builder_settings', {})
@@ -505,8 +505,8 @@ class PortfolioDataProvider:
             # Use PortfolioGraph methods for return calculation with correct context for overlays
             if return_type == 'portfolio':
                 # Portfolio returns: use operational context with NO normalization (like computed system)
-                from spark.portfolio.visitors import AggregationVisitor
-                from spark.portfolio.metrics import WeightedAverage
+                from portfolio.visitors import AggregationVisitor
+                from portfolio.metrics import WeightedAverage
                 
                 # Create WeightedAverage with normalization disabled to match computed system
                 aggregator = WeightedAverage(normalize_weights=False)
@@ -539,12 +539,12 @@ class PortfolioDataProvider:
                     active_value = aligned_portfolio - aligned_benchmark
                     
                     # Create metric-like object to match the rest of the code
-                    from spark.portfolio.metrics import TimeSeriesMetric
+                    from portfolio.metrics import TimeSeriesMetric
                     metric = TimeSeriesMetric(active_value)
                 elif isinstance(portfolio_value, (int, float)) and isinstance(benchmark_value, (int, float)):
                     # Scalar values
                     active_value = portfolio_value - benchmark_value
-                    from spark.portfolio.metrics import ScalarMetric
+                    from portfolio.metrics import ScalarMetric
                     metric = ScalarMetric(active_value)
                 else:
                     logger.warning(f"Incompatible metric types for active returns calculation: {type(portfolio_value)} vs {type(benchmark_value)}")

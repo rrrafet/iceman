@@ -19,16 +19,16 @@ from .metrics import (
 )
 
 if TYPE_CHECKING:
-    from spark.risk.estimator import LinearRiskModelEstimator, LinearRiskModel
-    from spark.risk.base import RiskDecomposerBase
+    from risk.estimator import LinearRiskModelEstimator, LinearRiskModel
+    from risk.base import RiskDecomposerBase
     from .components import PortfolioComponent, PortfolioLeaf, PortfolioNode
     from .metrics import WeightCalculationService
-    from spark.risk.schema import RiskResultSchema
-    from spark.risk.risk_analysis import RiskResult
+    from risk.schema import RiskResultSchema
+    from risk.risk_analysis import RiskResult
 
 # Import simplified risk analysis functions
 try:
-    from spark.risk.risk_analysis import analyze_portfolio_risk, analyze_active_risk, RiskResult
+    from risk.risk_analysis import analyze_portfolio_risk, analyze_active_risk, RiskResult
 except ImportError:
     # Fallback if risk_analysis module is not available
     analyze_portfolio_risk = None
@@ -255,7 +255,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         self.annualize = annualize
         
         # Initialize logging
-        from spark.core.logging_config import setup_risk_decomposition_logging
+        from core.logging_config import setup_risk_decomposition_logging
         self.logger = setup_risk_decomposition_logging(
             log_level=log_level,
             verbose=verbose,
@@ -266,7 +266,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
 
         # Initialize estimator
         if estimator is None:
-            from spark.risk.estimator import LinearRiskModelEstimator
+            from risk.estimator import LinearRiskModelEstimator
             self.estimator = LinearRiskModelEstimator(regression_type='ols', min_obs=30, freq=freq)
             self.logger.info("Initialized default LinearRiskModelEstimator with OLS regression and min_obs=30")
         else:
@@ -1694,7 +1694,7 @@ class FactorRiskDecompositionVisitor(PortfolioVisitor):
         RiskResultSchema
             Visitor results in unified schema format with comprehensive data
         """
-        from spark.risk.schema_factory import RiskSchemaFactory
+        from risk.schema_factory import RiskSchemaFactory
         
         # Use factory method to create schema from visitor results
         return RiskSchemaFactory.from_factor_risk_decomposition_visitor(

@@ -12,9 +12,9 @@ import time
 
 # Import the visitor from the portfolio module
 try:
-    from spark.portfolio.visitors import FactorRiskDecompositionVisitor
-    from spark.portfolio.graph import PortfolioGraph
-    from spark.risk.risk_analysis import RiskResult
+    from portfolio.visitors import FactorRiskDecompositionVisitor
+    from portfolio.graph import PortfolioGraph
+    from risk.risk_analysis import RiskResult
 except ImportError as e:
     logging.warning(f"Import error: {e}")
     FactorRiskDecompositionVisitor = None
@@ -22,9 +22,9 @@ except ImportError as e:
     RiskResult = None
 
 if TYPE_CHECKING:
-    from spark.portfolio.visitors import FactorRiskDecompositionVisitor
-    from spark.portfolio.graph import PortfolioGraph
-    from spark.risk.risk_analysis import RiskResult
+    from portfolio.visitors import FactorRiskDecompositionVisitor
+    from portfolio.graph import PortfolioGraph
+    from risk.risk_analysis import RiskResult
 
 logger = logging.getLogger(__name__)
 
