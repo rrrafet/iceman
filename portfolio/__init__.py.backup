@@ -1,0 +1,101 @@
+"""
+Portfolio Hierarchy Module
+=========================
+
+This module provides classes for modeling portfolio hierarchies as directed acyclic graphs (DAGs).
+Each node and leaf represents different portfolio groups or individual portfolios with associated
+benchmark, portfolio, and active metrics.
+
+Key Components:
+- PortfolioComponent: Abstract base class for all portfolio components
+- PortfolioNode: Intermediate nodes representing portfolio groups
+- PortfolioLeaf: Terminal nodes representing individual portfolios
+- PortfolioGraph: Main container for the portfolio hierarchy
+- PortfolioVisualizer: Visualization utilities for the portfolio graph
+"""
+
+# Initialize logging for portfolio module
+from ..logging_config import get_logger
+logger = get_logger(__name__)
+
+from .components import PortfolioComponent, PortfolioNode, PortfolioLeaf
+from .graph import PortfolioGraph
+from .visualizer import PortfolioVisualizer
+from .risk_analyzer import (
+    PortfolioRiskAnalyzer, create_portfolio_risk_analyzer
+)
+from .metrics import (
+    # Metric abstractions
+    Metric, ScalarMetric, SeriesMetric,
+    MetricStore, InMemoryMetricStore,
+    # Aggregation strategies
+    Aggregator, Sum, WeightedAverage, ExcessReturnAgg,
+    MultiMetricAggregator
+)
+# Visitor pattern classes
+from .visitors import (
+    PortfolioVisitor, AggregationVisitor, MultiMetricVisitor,
+    ExcessReturnVisitor
+)
+
+__all__ = [
+    # Core components
+    "PortfolioComponent",
+    "PortfolioNode", 
+    "PortfolioLeaf",
+    "PortfolioGraph",
+    "PortfolioVisualizer",
+    # Risk analysis
+    "PortfolioRiskAnalyzer",
+    "create_portfolio_risk_analyzer",
+    # Metric abstractions
+    "Metric",
+    "ScalarMetric",
+    "SeriesMetric",
+    "MetricStore",
+    "InMemoryMetricStore",
+    # Aggregation strategies
+    "Aggregator",
+    "Sum",
+    "WeightedAverage",
+    "ExcessReturnAgg",
+    "MultiMetricAggregator",
+    # Visitor pattern
+    "PortfolioVisitor",
+    "AggregationVisitor",
+    "MultiMetricVisitor",
+    "ExcessReturnVisitor",
+    # Helper functions
+    "get_standard_metric_names",
+    "STANDARD_METRICS",
+]
+
+
+# Standard metric names for consistent usage
+STANDARD_METRICS = {
+    # Core metrics
+    'weight': 'Component weight',
+    'benchmark_weight': 'Benchmark weight',
+    'active_weight': 'Active weight',
+    
+    # Financial metrics
+    'forward_returns': 'Expected forward returns',
+    'forward_risk': 'Expected forward risk',
+    'daily_return': 'Daily return series',
+    'pnl': 'Profit and loss',
+    'notional': 'Notional value',
+    
+    # Risk metrics
+    'selection_alpha': 'Selection alpha (stock picking)',
+    'active_risk': 'Active risk',
+    
+    # Relationship metrics
+    'allocation_tilt': 'Allocation tilt (parent->child)',
+    
+    # Scaling metrics
+    'scaling_factor': 'Scaling factor'
+}
+
+def get_standard_metric_names():
+    """Get dictionary of standard metric names and descriptions"""
+    return STANDARD_METRICS.copy()
