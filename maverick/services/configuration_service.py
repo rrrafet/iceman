@@ -1,0 +1,591 @@
+"""
+Configuration Service for portfolio risk analysis system.
+Manages YAML configuration loading, settings, and defaults.
+"""
+
+from typing import Dict, Any, List, Optional
+import yaml
+import logging
+import os
+from pathlib import Path
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+
+class ConfigurationService:
+    """
+    Manages configuration loading and settings for the risk analysis system.
+    
+    Provides centralized configuration management with YAML loading,
+    default settings, and dynamic configuration updates.
+    """
+    
+    def __init__(self, config_path: Optional[str] = None):
+        """
+        Initialize configuration service.
+        
+        Args:
+            config_path: Path to YAML configuration file
+        """
+        self.config_path = Path(config_path) if config_path else None
+        self._config: Dict[str, Any] = {}
+        self._defaults = self._get_default_config()
+        self._base_dir: Optional[Path] = None
+        
+        if self.config_path and self.config_path.exists():
+            self.load_config(str(self.config_path))
+        else:
+            logger.info("Using default configuration")
+            self._config = self._defaults.copy()
+            self._initialize_base_dir()
+    
+    def _get_default_config(self) -> Dict[str, Any]:
+        """Get default configuration structure."""
+        return {
+            "paths": {
+                "base_dir": ".",
+                "config_dir": "config",
+                "data_dir": "data",
+                "graphs_dir": "graphs"
+            },
+            "risk_model": {
+                "default": "macro1",
+                "available": ["macro1"]
+            },
+            "portfolio": {
+                "default": "strategic_portfolio",
+                "root_component_id": "TOTAL"
+            },
+            "analysis": {
+                "annualized": True,
+                "frequency": "daily",
+                "currency": "USD",
+                "risk_model_type": "factor_based"
+            },
+            "ui_defaults": {
+                "lens": "portfolio",
+                "show_top_n_factors": 8,
+                "show_top_n_assets": 8,
+                "default_date_range": "latest_year"
+            },
+            "data_sources": {
+                "portfolio_data": "data/portfolio.parquet",
+                "factor_returns": "data/factor_returns.parquet"
+            },
+            "logging": {
+                "level": "INFO",
+                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            }
+        }
+    
+    def load_config(self, config_path: str) -> Dict[str, Any]:
+        """
+        Load configuration from YAML file.
+        
+        Args:
+            config_path: Path to YAML configuration file
+            
+        Returns:
+            Loaded configuration dictionary
+        """
+        try:
+            config_path_obj = Path(config_path)
+            
+            if not config_path_obj.exists():
+                logger.warning(f"Configuration file not found: {config_path}")
+                return self._defaults.copy()
+            
+            with open(config_path_obj, 'r', encoding='utf-8') as f:
+                loaded_config = yaml.safe_load(f)
+            
+            if not loaded_config:
+                logger.warning(f"Empty configuration file: {config_path}")
+                return self._defaults.copy()
+            
+            # Merge with defaults (loaded config takes precedence)
+            self._config = self._merge_configs(self._defaults, loaded_config)
+            self.config_path = config_path_obj
+            
+            # Initialize base directory after config is loaded
+            self._initialize_base_dir()
+            
+            logger.info(f"Loaded configuration from {config_path}")
+            return self._config.copy()
+            
+        except yaml.YAMLError as e:
+            logger.error(f"YAML parsing error in {config_path}: {e}")
+            return self._defaults.copy()
+        except Exception as e:
+            logger.error(f"Failed to load configuration from {config_path}: {e}")
+            return self._defaults.copy()
+    
+    def _merge_configs(self, defaults: Dict[str, Any], loaded: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Recursively merge loaded config with defaults.
+        
+        Args:
+            defaults: Default configuration
+            loaded: Loaded configuration
+            
+        Returns:
+            Merged configuration
+        """
+        merged = defaults.copy()
+        
+        for key, value in loaded.items():
+            if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+                merged[key] = self._merge_configs(merged[key], value)
+            else:
+                merged[key] = value
+        
+        return merged
+    
+    def get_default_risk_model(self) -> str:
+        """
+        Get default risk model code.
+        
+        Returns:
+            Default risk model code
+        """
+        return self._config.get("risk_model", {}).get("default", "macro1")
+    
+    def get_available_risk_models(self) -> List[str]:
+        """
+        Get list of available risk models from configuration.
+        
+        Returns:
+            List of available risk model codes
+        """
+        return self._config.get("risk_model", {}).get("available", ["macro1"])
+    
+    def get_default_portfolio_graph(self) -> str:
+        """
+        Get default portfolio graph name.
+        
+        Returns:
+            Default portfolio graph name
+        """
+        return self._config.get("portfolio_graphs", {}).get("default", "strategic_portfolio")
+    
+    def get_available_portfolio_graphs(self) -> List[str]:
+        """
+        Get list of available portfolio graphs from configuration.
+        
+        Returns:
+            List of available portfolio graph names
+        """
+        return self._config.get("portfolio_graphs", {}).get("available", ["strategic_portfolio"])
+    
+    def get_portfolio_name(self) -> str:
+        """
+        Get portfolio name for display.
+        
+        Returns:
+            Portfolio name
+        """
+        return self.get_default_portfolio()
+    
+    def get_default_lens(self) -> str:
+        """
+        Get default lens from UI settings.
+        
+        Returns:
+            Default lens ('portfolio', 'benchmark', 'active')
+        """
+        return self._config.get("ui_defaults", {}).get("lens", "portfolio")
+    
+    def get_currency(self) -> str:
+        """
+        Get currency from analysis settings.
+        
+        Returns:
+            Currency code (e.g., 'USD')
+        """
+        return self._config.get("analysis", {}).get("currency", "USD")
+    
+    def get_annualized_default(self) -> bool:
+        """
+        Get default annualized setting.
+        
+        Returns:
+            True if annualized by default
+        """
+        return self._config.get("analysis", {}).get("annualized", True)
+    
+    def get_default_portfolio(self) -> str:
+        """
+        Get default portfolio name.
+        
+        Returns:
+            Default portfolio name
+        """
+        return self.get_default_portfolio_graph()
+    
+    def get_root_component_id(self, portfolio_graph=None) -> str:
+        """
+        Get root component ID for portfolio hierarchy.
+        
+        Args:
+            portfolio_graph: Optional portfolio graph object to read root_id from
+            
+        Returns:
+            Root component ID
+        """
+        # If portfolio graph is provided, use its root_id
+        if portfolio_graph and hasattr(portfolio_graph, 'root_id') and portfolio_graph.root_id:
+            return portfolio_graph.root_id
+        
+        # Fallback to default value
+        return "TOTAL"
+    
+    def get_analysis_settings(self) -> Dict[str, Any]:
+        """
+        Get analysis settings.
+        
+        Returns:
+            Dictionary with analysis settings (annualized, currency, etc.)
+        """
+        return self._config.get("analysis", {}).copy()
+    
+    def get_ui_settings(self) -> Dict[str, Any]:
+        """
+        Get UI default settings.
+        
+        Returns:
+            Dictionary with UI settings (default lens, date range, etc.)
+        """
+        return self._config.get("ui_defaults", {}).copy()
+    
+    def get_data_sources(self) -> Dict[str, str]:
+        """
+        Get data source paths.
+        
+        Returns:
+            Dictionary with data source file paths
+        """
+        return self._config.get("data_sources", {}).copy()
+    
+    def update_setting(self, key: str, value: Any) -> bool:
+        """
+        Update a configuration setting using dot notation.
+        
+        Args:
+            key: Setting key (supports dot notation like 'risk_model.default')
+            value: New value
+            
+        Returns:
+            True if update successful, False otherwise
+        """
+        try:
+            keys = key.split('.')
+            current = self._config
+            
+            # Navigate to the parent of the target key
+            for k in keys[:-1]:
+                if k not in current:
+                    current[k] = {}
+                current = current[k]
+            
+            # Set the final value
+            current[keys[-1]] = value
+            
+            logger.info(f"Updated configuration: {key} = {value}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to update setting {key}: {e}")
+            return False
+    
+    def get_setting(self, key: str, default: Any = None) -> Any:
+        """
+        Get a configuration setting using dot notation.
+        
+        Args:
+            key: Setting key (supports dot notation like 'risk_model.default')
+            default: Default value if key not found
+            
+        Returns:
+            Configuration value or default
+        """
+        try:
+            keys = key.split('.')
+            current = self._config
+            
+            for k in keys:
+                if isinstance(current, dict) and k in current:
+                    current = current[k]
+                else:
+                    return default
+            
+            return current
+            
+        except Exception as e:
+            logger.error(f"Error getting setting {key}: {e}")
+            return default
+    
+    def save_config(self, config_path: Optional[str] = None) -> bool:
+        """
+        Save current configuration to YAML file.
+        
+        Args:
+            config_path: Optional path to save to (uses loaded path if not provided)
+            
+        Returns:
+            True if save successful, False otherwise
+        """
+        save_path = Path(config_path) if config_path else self.config_path
+        
+        if not save_path:
+            logger.error("No save path specified and no config file loaded")
+            return False
+        
+        try:
+            # Ensure directory exists
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Add metadata
+            config_to_save = self._config.copy()
+            config_to_save["_metadata"] = {
+                "saved_at": datetime.now().isoformat(),
+                "version": "1.0"
+            }
+            
+            with open(save_path, 'w', encoding='utf-8') as f:
+                yaml.dump(config_to_save, f, default_flow_style=False, indent=2)
+            
+            logger.info(f"Saved configuration to {save_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to save configuration to {save_path}: {e}")
+            return False
+    
+    def reset_to_defaults(self) -> None:
+        """Reset configuration to default values."""
+        self._config = self._defaults.copy()
+        logger.info("Reset configuration to defaults")
+    
+    def get_factor_subset(self) -> Optional[List[str]]:
+        """
+        Get factor subset if configured (for filtering factors).
+        
+        Returns:
+            List of factor names or None for all factors
+        """
+        return self.get_setting("analysis.factor_subset", None)
+    
+    def validate_config(self) -> Dict[str, Any]:
+        """
+        Validate current configuration.
+        
+        Returns:
+            Dictionary with validation results
+        """
+        validation_result = {
+            "valid": True,
+            "errors": [],
+            "warnings": []
+        }
+        
+        # Check required sections
+        required_sections = ["risk_model", "portfolio", "analysis", "ui_defaults"]
+        for section in required_sections:
+            if section not in self._config:
+                validation_result["errors"].append(f"Missing required section: {section}")
+        
+        # Validate risk model settings
+        risk_model_config = self._config.get("risk_model", {})
+        if "default" not in risk_model_config:
+            validation_result["errors"].append("Missing risk_model.default")
+        
+        available_models = risk_model_config.get("available", [])
+        default_model = risk_model_config.get("default")
+        if default_model and default_model not in available_models:
+            validation_result["warnings"].append(
+                f"Default risk model '{default_model}' not in available models"
+            )
+        
+        # Validate data sources
+        data_sources = self._config.get("data_sources", {})
+        for source_name, source_path in data_sources.items():
+            if source_path and not Path(source_path).exists():
+                validation_result["warnings"].append(f"Data source file not found: {source_path}")
+        
+        # Validate analysis settings
+        analysis_config = self._config.get("analysis", {})
+        if analysis_config.get("frequency") not in ["daily", "weekly", "monthly", None]:
+            validation_result["warnings"].append("Invalid analysis frequency")
+        
+        validation_result["valid"] = len(validation_result["errors"]) == 0
+        
+        logger.info(f"Configuration validation: {'PASS' if validation_result['valid'] else 'FAIL'}")
+        return validation_result
+    
+    def get_config_summary(self) -> Dict[str, Any]:
+        """
+        Get comprehensive configuration summary.
+        
+        Returns:
+            Dictionary with configuration summary
+        """
+        summary = {
+            "config_path": str(self.config_path) if self.config_path else None,
+            "sections": list(self._config.keys()),
+            "default_risk_model": self.get_default_risk_model(),
+            "available_risk_models": self.get_available_risk_models(),
+            "default_portfolio": self.get_default_portfolio(),
+            "root_component_id": "Portfolio-specific (see individual graph configs)",
+            "analysis_settings": self.get_analysis_settings(),
+            "ui_settings": self.get_ui_settings(),
+            "data_sources": self.get_data_sources()
+        }
+        
+        # Add validation status
+        validation = self.validate_config()
+        summary["validation"] = {
+            "valid": validation["valid"],
+            "error_count": len(validation["errors"]),
+            "warning_count": len(validation["warnings"])
+        }
+        
+        return summary
+    
+    def get_full_config(self) -> Dict[str, Any]:
+        """
+        Get complete configuration dictionary.
+        
+        Returns:
+            Complete configuration
+        """
+        return self._config.copy()
+    
+    def _initialize_base_dir(self) -> None:
+        """
+        Initialize the base directory for resource resolution.
+        Priority:
+        1. Environment variable MAVERICK_BASE_DIR
+        2. Config file paths.base_dir
+        3. Directory containing the config file
+        4. Current working directory
+        """
+        # Check environment variable first
+        env_base_dir = os.environ.get('MAVERICK_BASE_DIR')
+        if env_base_dir:
+            self._base_dir = Path(env_base_dir).resolve()
+            logger.info(f"Using base directory from environment: {self._base_dir}")
+            return
+        
+        # Check config file setting
+        config_base_dir = self._config.get('paths', {}).get('base_dir')
+        if config_base_dir:
+            # If config specifies a base_dir, resolve it relative to config file location
+            if self.config_path:
+                base = self.config_path.parent / config_base_dir
+            else:
+                base = Path(config_base_dir)
+            self._base_dir = base.resolve()
+            logger.info(f"Using base directory from config: {self._base_dir}")
+            return
+        
+        # Use config file directory if available
+        if self.config_path:
+            self._base_dir = self.config_path.parent.resolve()
+            logger.info(f"Using config file directory as base: {self._base_dir}")
+            return
+        
+        # Default to current working directory
+        self._base_dir = Path.cwd()
+        logger.info(f"Using current working directory as base: {self._base_dir}")
+    
+    def resolve_path(self, path_str: str) -> Path:
+        """
+        Resolve a path string relative to the base directory.
+        
+        Args:
+            path_str: Path string (can be absolute or relative)
+            
+        Returns:
+            Resolved absolute Path object
+        """
+        if not self._base_dir:
+            self._initialize_base_dir()
+        
+        path = Path(path_str)
+        
+        # If already absolute, return as is
+        if path.is_absolute():
+            return path
+        
+        # Otherwise resolve relative to base_dir
+        return (self._base_dir / path).resolve()
+    
+    def get_data_source_path(self, source_name: str) -> Path:
+        """
+        Get resolved path for a data source.
+        
+        Args:
+            source_name: Name of the data source (e.g., 'factor_returns', 'portfolio_config')
+            
+        Returns:
+            Resolved Path object for the data source
+        """
+        # Special handling for portfolio_config - dynamically resolve from portfolio graphs
+        if source_name == 'portfolio_config':
+            default_portfolio = self.get_default_portfolio_graph()
+            return self.get_portfolio_graph_path(default_portfolio)
+        
+        data_sources = self.get_data_sources()
+        path_str = data_sources.get(source_name)
+        
+        if not path_str:
+            raise ValueError(f"Data source '{source_name}' not found in configuration")
+        
+        return self.resolve_path(path_str)
+    
+    def get_portfolio_graph_path(self, graph_name: str) -> Path:
+        """
+        Get resolved path for a portfolio graph configuration.
+        
+        Args:
+            graph_name: Name of the portfolio graph (e.g., 'strategic_portfolio')
+            
+        Returns:
+            Resolved Path object for the portfolio graph configuration
+        """
+        portfolio_configs = self._config.get("portfolio_graph_configs", {})
+        path_str = portfolio_configs.get(graph_name)
+        
+        if not path_str:
+            raise ValueError(f"Portfolio graph '{graph_name}' not found in configuration")
+        
+        return self.resolve_path(path_str)
+    
+    def get_base_dir(self) -> Path:
+        """
+        Get the base directory for resource resolution.
+        
+        Returns:
+            Base directory Path object
+        """
+        if not self._base_dir:
+            self._initialize_base_dir()
+        return self._base_dir
+    
+    def update_from_dict(self, updates: Dict[str, Any]) -> bool:
+        """
+        Update configuration from a dictionary.
+        
+        Args:
+            updates: Dictionary with configuration updates
+            
+        Returns:
+            True if update successful
+        """
+        try:
+            self._config = self._merge_configs(self._config, updates)
+            logger.info(f"Updated configuration with {len(updates)} changes")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update configuration from dict: {e}")
+            return False
